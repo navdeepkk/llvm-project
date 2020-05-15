@@ -62,6 +62,7 @@ void registerTestGpuParallelLoopMappingPass();
 void registerTestVectorConversions();
 void registerTestVectorToLoopsPass();
 void registerVectorizerTestPass();
+void registerAffineLoopTransform();
 } // namespace mlir
 
 static cl::opt<std::string>
@@ -128,6 +129,7 @@ void registerTestPasses() {
   registerTestVectorConversions();
   registerTestVectorToLoopsPass();
   registerVectorizerTestPass();
+	registerAffineLoopTransform();
 }
 
 static cl::opt<bool>
