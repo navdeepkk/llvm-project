@@ -136,6 +136,7 @@ struct AffineLoopTransform
       SmallVector<SmallVector<int64_t, 4>, 4> dependenceMatrix;
       // Captures all valid interchange Permutations.
       std::vector<std::vector<int64_t>> validPermuataions;
+      llvm::DenseMap<int, int> permScore;
       // Utility to insert into dependeces.
       void insertIntoDependences(
           SmallVector<DependenceComponent, 2> dependenceComponents,
@@ -654,10 +655,10 @@ static void checkDependences(AffineLoopTransform::LoopInfo *loopNest) {
           } else {
             // Once the dependence is found insert it into a rarDependences
             // vector.
-            std::cout << "static dependence: \n";
-            srcOpInst->dump();
-            dstOpInst->dump();
-            std::cout << "static dependence: \n";
+            //std::cout << "static dependence: \n";
+            //srcOpInst->dump();
+            //dstOpInst->dump();
+            //std::cout << "static dependence: \n";
             loopNest->loadStoreInfo.insertIntoWrwDependences(
                 srcOpInst, dstOpInst, depVector);
           }
@@ -761,7 +762,11 @@ compareAccessMatrix(std::vector<SmallVector<int64_t, 8>> srcMatrix,
   return isEqual;
 }
 
-static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
+static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
+                            std::vector<int64_t> permuteMap) {
+	// At one time only one refGroup can be present.
+	// Clear refgroup before starting.
+	loopNest->loadStoreInfo.refGroups.clear();
   // First create treat all the individual access as one reference group.
   // Initialize a boolvector 'isVisited' to mark all the loads/stores as not
   // visited.
@@ -773,29 +778,8 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
     toPush.clear();
     isVisited.push_back(false);
   }
-  // Print the both the things here.
-  /*
-  std::cout<<"\n";
-  for(auto &loadOrStore: loopNest->loadStoreInfo.loadsAndStores){
-          //std::cout<<loadOrStore<<" ";
-          loadOrStore->getLoc().dump();
-  }
-  std::cout<<"\n";
-  for(auto &loadOrStore: loopNest->loadStoreInfo.refGroups){
-          for(auto refGroup: loadOrStore)
-                  std::cout<<refGroup<<" ";
-  }
-  std::cout<<"\ndependence\n";
-  for(auto &loadOrStore: loopNest->loadStoreInfo.rarDependences){
-                  //std::cout<<loadOrStore.srcOpInst<<"
-  "<<loadOrStore.dstOpInst<<"\n";
-          loadOrStore.srcOpInst->getLoc().dump();std::cout<<"\n";
-          loadOrStore.dstOpInst->getLoc().dump();std::cout<<"\n";
-  }
-  std::cout<<"\n";
-  */
-  std::cout << "size before group creation: "
-            << loopNest->loadStoreInfo.refGroups.size() << std::endl;
+  //std::cout << "size before group creation: "
+         //   << loopNest->loadStoreInfo.refGroups.size() << std::endl;
 
   // Now refGroups has been intialized to contain  all accesses as individual
   // groups.
@@ -814,11 +798,23 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
     else {
       // std::cout<<"To continue: "<<toContinue<<"\n";
       isVisited[toContinue] = true;
+			// Find the size of cache line size.
+			auto loadOp = dyn_cast<AffineLoadOp>(loopNest->loadStoreInfo.loadsAndStores[toContinue]); 
+			auto storeOp = dyn_cast<AffineStoreOp>(loopNest->loadStoreInfo.loadsAndStores[toContinue]);
+			unsigned width;
+			if(loadOp){
+				width = loadOp.getMemRefType().getElementType().getIntOrFloatBitWidth(); 
+			}
+			else{
+				width = storeOp.getMemRefType().getElementType().getIntOrFloatBitWidth(); 
+			}
+			unsigned cls = 64 / (width / 8);
       // Now we have the index of the operation. I can go ahead and see if this
       // opertion has same access function as that of some other group, except
       // itself.
       for (auto &refGroup : loopNest->loadStoreInfo.refGroups) {
-        // First check if this ref if self refGroup.
+        // checking here if the refGroup are same as the chosen ref. If it is
+        // the same then skip this iteration.
         bool isSameRefGroup = false;
         for (auto &ref : refGroup) {
           if (ref == loopNest->loadStoreInfo.loadsAndStores[toContinue])
@@ -828,8 +824,9 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
         if (isSameRefGroup)
           continue;
         // TODO currently choosing first access as the representative of the
-        // refGroup. Should have chosen the worst access. Find the index of the
-        // representative of the reference group in the loadsOrStore list.
+        // refGroup. Should have chosen the worst access.
+        // Find the index of therepresentative of the reference group in the
+        // loadsOrStore list.
         unsigned repInx;
         for (repInx = 0; repInx < loopNest->loadStoreInfo.loadsAndStores.size();
              repInx++) {
@@ -837,7 +834,6 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
             break;
           }
         }
-        // std::cout<<"repInx: "<<repInx<<" toContinue: "<<toContinue<<"\n";
         bool toGroup = false;
         // Compare the access matrix, of the current candidate to be grouped and
         // the refGroup representative. If true is returned then the accesses
@@ -852,66 +848,49 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
               loopNest->loadStoreInfo.loadsAndStores[repInx];
           mlir::Operation *dstOpInst =
               loopNest->loadStoreInfo.loadsAndStores[toContinue];
-          // std::cout<<"dep.src: "<<srcOpInst<<"\n";
-          // std::cout<<"srcopt:
-          // "<<loopNest->loadStoreInfo.loadsAndStores[repInx]<<"\n";
-          // std::cout<<"dep.dst: "<<dstOpInst<<"\n";
-          // std::cout<<"dstinst:
-          // "<<loopNest->loadStoreInfo.loadsAndStores[toContinue]<<"\n";
           // First checking in RAR.
           for (auto &dep : loopNest->loadStoreInfo.rarDependences) {
             // Solution exists for if true. We can then check if spatial or
             // temporal is present.
-            // std::cout<<"dep.src: "<<dep.srcOpInst<<"\n";
-            // std::cout<<"srcopt: "<<srcOpInst<<"\n";
-            // std::cout<<"dep.dst: "<<dep.dstOpInst<<"\n";
-            // std::cout<<"dstinst: "<<dstOpInst<<"\n";
             if (((dep.srcOpInst == srcOpInst && dep.dstOpInst == dstOpInst) ||
                  (dep.srcOpInst == dstOpInst && dep.dstOpInst == srcOpInst)) &&
                 (srcOpInst != dstOpInst)) {
-              std::cout << "RAR dep found: \n";
-              srcOpInst->getLoc().dump();
-              dstOpInst->getLoc().dump();
-              for (auto dep : dep.dependence) {
-                std::cout << dep << " ";
-              }
-              std::cout << "\n";
+              //std::cout << "RAR dep found: \n";
+              //srcOpInst->getLoc().dump();
+              //dstOpInst->getLoc().dump();
+              //for (auto dep : dep.dependence) {
+              //  std::cout << dep << " ";
+              //}
+              //std::cout << "\n";
               // Check for temproal resue. if only varies in the last dimension
               // of the dependence only then we can say that temporal reuse is
               // present.
               bool isZero = true;
               for (unsigned i = 0; i < dep.dependence.size() - 1; ++i) {
-                if (dep.dependence[i] != 0)
+                if (dep.dependence[permuteMap[i]] != 0)
                   isZero = false;
               }
-              std::cout << "isZero after temporal check: " << isZero << "\n";
+              //std::cout << "isZero after temporal check: " << isZero << "\n";
               // if all the elements are 0 uptil the last element then temporal
               // reuse is present.
               if (isZero) {
-                toGroup = true;
-                break;
-              }
-              // if temporal reuse was not present then maybe spatial reuse is
-              // present check for it now.
-              else {
-                isZero = true;
-                for (unsigned i = 0; i < dep.dependence.size() - 1; ++i) {
-                  if (dep.dependence[i] != 0)
-                    isZero = false;
-                }
-                if (isZero) {
-                  // Check if last element is less than the CLS.
-                  if (abs(dep.dependence[dep.dependence.size() - 1]) <
-                      6 /*CLS*/) {
-                    toGroup = true;
-                    break;
-                  }
+                // TODO: add check for the condition given in paper for temporal
+                // reuse.
+                // The condition essentially means that temporal reuse can even
+                // be exploited if there is agap of atmost '2' between
+                // iterations.
+                if (abs(dep.dependence[permuteMap[dep.dependence.size() -
+                                                  1]]) <= 2) {
+                  toGroup = true;
+                  break;
                 }
               }
             }
           }
           // If we have found that the group can be made then break. and dont
-          // check for WRW.
+          // check for WRW, and then check if theere is no dependence but still
+          // there is spatial re-use because of the last dimension just varying
+          // a little(less than 'cls').
           if (!toGroup) {
             // then checking in WRW.
             for (auto dep : loopNest->loadStoreInfo.wrwDependences) {
@@ -921,44 +900,60 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
                    (dep.srcOpInst == dstOpInst &&
                     dep.dstOpInst == srcOpInst)) &&
                   (srcOpInst != dstOpInst)) {
-                std::cout << "wrw dep found: \n";
-                srcOpInst->getLoc().dump();
-                dstOpInst->getLoc().dump();
-                for (auto dep : dep.dependence) {
-                  std::cout << dep << " ";
-                }
-                std::cout << "\n";
+                //std::cout << "wrw dep found: \n";
+                //srcOpInst->getLoc().dump();
+                //dstOpInst->getLoc().dump();
+                //for (auto dep : dep.dependence) {
+                  //std::cout << dep << " ";
+                //}
+                //std::cout << "\n";
                 // Check for temproal resue. if only varies in the last
                 // dimension of the dependence only then we can say that
                 // temporal reuse is present.
                 bool isZero = true;
                 for (unsigned i = 0; i < dep.dependence.size() - 1; ++i) {
-                  if (dep.dependence[i] != 0)
+                  if (dep.dependence[permuteMap[i]] != 0)
                     isZero = false;
                 }
                 // if all the elements are 0 uptil the last element then
                 // temporal reuse is present.
                 if (isZero) {
-                  toGroup = true;
-                  std::cout << "toGroup at rar " << toGroup << "\n";
-                  break;
+                  if (abs(dep.dependence[permuteMap[dep.dependence.size() -
+                                                    1]]) <= 2) {
+                    toGroup = true;
+                    break;
+                  }
+                  //std::cout << "toGroup at rar " << toGroup << "\n";
                 }
-                // if temporal reuse was not present then maybe spatial reuse is
-                // present check for it now.
-                else {
-                  isZero = true;
-                  for (unsigned i = 0; i < dep.dependence.size() - 1; ++i) {
-                    if (dep.dependence[i] != 0)
-                      isZero = false;
-                  }
-                  if (isZero) {
-                    // Check if last element is less than the CLS.
-                    if (abs(dep.dependence[dep.dependence.size() - 1]) <
-                        6 /*CLS*/) {
-                      toGroup = true;
-                      break;
-                    }
-                  }
+              }
+            }
+            // Check here for the last condition where the access matrix are the
+            // same, but there is no dependence but still we can pair the
+            // elements because of spatial reuse being present. to check the
+            // spatial reuse we needto check the 'b', if it is the same overall
+            // and only the entry corresponding to the last loop varies by a
+            // small amount(cls)
+            if (!toGroup) {
+              //std::cout << "not grouped until now, last try: \n";
+              // We already know th access matrix are the same. just check the
+              // last value in the matrix and see if the constants just vary by
+              // a small constant.
+              bool isSame = true;
+              std::vector<SmallVector<int64_t, 8>> b1 =
+                  loopNest->loadStoreInfo.b[toContinue];
+              std::vector<SmallVector<int64_t, 8>> b2 =
+                  loopNest->loadStoreInfo.b[repInx];
+              for (unsigned i = 0; i < b1.size(); ++i) {
+                for (unsigned j = 0; j < b1[i].size() - 1; j++) {
+                  if (b1[i][permuteMap[j]] != b2[i][permuteMap[j]])
+                    isSame = false;
+                }
+              }
+              if (isSame) {
+                // Check if difference in last elements is less than the CLS.
+                if (abs(b1[0][permuteMap[b1[0].size() - 1]] -
+                        b2[0][permuteMap[b2[0].size() - 1]]) < cls /*CLS*/) {
+                  toGroup = true;
                 }
               }
             }
@@ -967,14 +962,14 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
         // If to group is set then the elements can be mergerd nto one group
         // erase from the vector adn insert into the refGroup and then break the
         // loop.
-        std::cout << "toGroup at end " << toGroup << "\n";
+        //std::cout << "toGroup at end " << toGroup << "\n";
         if (toGroup) {
           // Find the RefGroup which has the element loadsAndStores[toContinue]
           // and delete it.
-          std::cout << "size before entry deletion: "
-                    << loopNest->loadStoreInfo.refGroups.size() << "\n";
-					loopNest->loadStoreInfo.loadsAndStores[toContinue]->getLoc().dump();
-				  unsigned refGroupInx;
+          //std::cout << "size before entry deletion: "
+          //          << loopNest->loadStoreInfo.refGroups.size() << "\n";
+          //loopNest->loadStoreInfo.loadsAndStores[toContinue]->getLoc().dump();
+          unsigned refGroupInx;
           bool flag = false;
           for (refGroupInx = 0;
                refGroupInx < loopNest->loadStoreInfo.refGroups.size();
@@ -995,13 +990,17 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
               loopNest->loadStoreInfo.refGroups.begin() + refGroupInx);
           // Mark the thing in RefGroup as visited.
           isVisited[repInx] = true;
-          std::cout << "size after entry deletion: "
-                    << loopNest->loadStoreInfo.refGroups.size() << "\n";
+          //std::cout << "size after entry deletion: "
+          //          << loopNest->loadStoreInfo.refGroups.size() << "\n";
           break;
         }
       }
     }
   }
+	std::cout<<"permutatiopn: \n";
+	for(auto x: permuteMap)
+		std::cout<<x<<" ";
+	std::cout<<std::endl;
   std::cout << "size after group creation: "
             << loopNest->loadStoreInfo.refGroups.size() << std::endl;
   for (auto refGroup : loopNest->loadStoreInfo.refGroups) {
@@ -1013,8 +1012,127 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest) {
   }
 }
 
-// Walks the Function 'f' adding load and store ops to 'loadsAndStores'.
-// Runs pair-wise dependence checks.
+static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest, std::vector<int64_t> permuteMap) {
+  // Iterate through the representative of the refGroups and start calculating
+  // cache miss for each refGroup.
+  double totalCost = 0.0f;
+  double cost;
+  int64_t lb, ub, stride, iter, loopStep;
+  for (auto &refGroup : loopNest->loadStoreInfo.refGroups) {
+    // Initialize the cost of the Ref Group to be 1.
+    cost = 1.0f;
+    // TODO: currently taking the first element as the representative of the
+    // refGroup. 
+    // Find the first element in load/store list.
+    unsigned refGroupInx;
+    for (refGroupInx = 0;
+         refGroupInx < loopNest->loadStoreInfo.loadsAndStores.size();
+         ++refGroupInx) {
+      if (refGroup[0] == loopNest->loadStoreInfo.loadsAndStores[refGroupInx]) {
+        break;
+      }
+    }
+    // To calculate the no of cache misses traverse the access matrix form the
+    // last column to the first column.
+    std::vector<SmallVector<int64_t, 8>> accessMatrix =
+        loopNest->loadStoreInfo.B[refGroupInx];
+			// Find the size of cache line size.
+			auto loadOp = dyn_cast<AffineLoadOp>(loopNest->loadStoreInfo.loadsAndStores[refGroupInx]); 
+			auto storeOp = dyn_cast<AffineStoreOp>(loopNest->loadStoreInfo.loadsAndStores[refGroupInx]);
+			unsigned width;
+			if(loadOp){
+				width = loadOp.getMemRefType().getElementType().getIntOrFloatBitWidth(); 
+			}
+			else{
+				width = storeOp.getMemRefType().getElementType().getIntOrFloatBitWidth(); 
+			}
+			unsigned cls = 64 / (width / 8);
+    // 1-D access matrix needs to be handeled sperately.
+    if (accessMatrix.size() == 1) {
+      for (int j = accessMatrix[0].size() - 1; j >= 0; j--) {
+        lb = loopNest->loops[permuteMap[j]].getConstantLowerBound();
+        ub = loopNest->loops[permuteMap[j]].getConstantUpperBound();
+        loopStep = loopNest->loops[permuteMap[j]].getStep();
+        iter = ((ub - 1) - lb + loopStep) / loopStep;
+        stride = loopStep * accessMatrix[accessMatrix.size() - 1][permuteMap[j]];
+        if (accessMatrix[0][permuteMap[j]] == 0) {
+          // If last element is zero then cost is 1.
+          cost *= 1;
+        } else {
+          // Last element is not zero hence some cache misses will be
+          // encountered. If the 'stride' is less than 'cls' then some spatial
+          // re-use is present.
+          if (stride < cls) {
+            cost *= ((iter / cls) / (stride));
+          }
+          // If not then no spatial reuse is present and all will be misses.
+          else {
+            cost *= iter;
+          }
+        }
+      }
+      loopNest->loadStoreInfo.loadsAndStores[refGroupInx]->getLoc().dump();
+      std::cout << "access matrix cost: " << cost << "\n";
+			totalCost += cost;
+      continue;
+    }
+    for (int j = accessMatrix[0].size() - 1; j >= 0; j--) {
+      lb = loopNest->loops[permuteMap[j]].getConstantLowerBound();
+      ub = loopNest->loops[permuteMap[j]].getConstantUpperBound();
+      loopStep = loopNest->loops[permuteMap[j]].getStep();
+      iter = ((ub - 1) - lb + loopStep) / loopStep;
+      stride = loopStep * accessMatrix[accessMatrix.size() - 1][permuteMap[j]];
+      bool isZero = true;
+      for (unsigned i = 0; i < accessMatrix.size() - 1; i++) {
+        // Check if the last col is zero until the last element.
+        if (accessMatrix[i][permuteMap[j]] != 0)
+          isZero = false;
+      }
+      if (isZero) {
+        // Check what last elem is, If it's zero then give this column a score
+        // of '1'. Else give this column a score of (iter/cls/(loopStep *
+        // lastElem)).
+        if (accessMatrix[accessMatrix.size() - 1][permuteMap[j]] == 0) {
+          // If last element is zero and the col is last then cost is 1.
+          if (j == (int)accessMatrix[0].size() - 1)
+            cost *= 1;
+          else
+            // If col is not last then assuming that data from previous
+            // iteration didn't fit in cache, There will be 'n' misses.
+            cost *= iter;
+        } else {
+          // Last element is not zero hence some cache misses will be
+          // encountered. If the 'stride' is less than 'cls' then some spatial
+          // re-use is present.
+          if (stride < cls) {
+            cost *= ((iter / cls) / (stride));
+          }
+          // If not then no spatial reuse is present and all will be misses.
+          else {
+            cost *= iter;
+          }
+        }
+      }
+      // If the elements are not zero then we can stop here and conclude the
+      // remaining cache misses are product of iterations of remaining loops.
+      else {
+        for (int l = j; l >= 0; l--) {
+          lb = loopNest->loops[permuteMap[l]].getConstantLowerBound();
+          ub = loopNest->loops[permuteMap[l]].getConstantUpperBound();
+          loopStep = loopNest->loops[permuteMap[l]].getStep();
+          iter = ((ub - 1) - lb + loopStep) / loopStep;
+          cost *= iter;
+        }
+        break;
+      }
+    }
+    loopNest->loadStoreInfo.loadsAndStores[refGroupInx]->getLoc().dump();
+    std::cout << "access matrix cost: " << cost << "\n";
+		totalCost += cost;
+  }
+	return totalCost;
+}
+
 void AffineLoopTransform::runOnFunction() {
   // Collect the loads and stores within the function.
   //  loadsAndStores.clear();
@@ -1137,10 +1255,25 @@ void AffineLoopTransform::runOnFunction() {
     }
   }
 
+  // Post-process matrix 'b' to contain only one vector.
+  // Try to print the access matrices.
+  for (auto &loopNest : perfectLoopNests) {
+    for (auto &b : loopNest.loadStoreInfo.b) {
+      SmallVector<int64_t, 8> toPush;
+      for (unsigned i = 0; i < b.size(); i++) {
+        for (unsigned j = 0; j < b[i].size(); j++) {
+          toPush.push_back(b[i][j]);
+        }
+      }
+      b.clear();
+      b.push_back(toPush);
+    }
+  }
   // The access matrix has been constructed at this point we can now go on and
   // compute static information(which will not change because ofinterchanges),
   // such as rank, score of temporal reuse for each access.
-  for (auto loopNest : perfectLoopNests) {
+/*
+	for (auto loopNest : perfectLoopNests) {
     std::vector<double> permuteMap{1, 2, 3};
     for (unsigned i = 0; i < loopNest.loadStoreInfo.loadsAndStores.size();
          ++i) {
@@ -1167,7 +1300,7 @@ void AffineLoopTransform::runOnFunction() {
                 << "\n";
     }
   }
-
+*/
   // TODO: add things for the computation of group spatial/temporal resuse.
 
   // Seems things needed are in hand so we can go on to compute the depepndence
@@ -1263,7 +1396,10 @@ void AffineLoopTransform::runOnFunction() {
   // I think the dependeces in RARDependence are pruned i can start with algo of
   // creating refGroups.
   for (auto &loopNest : perfectLoopNests) {
-    createRefGroups(&loopNest);
+		for(auto perm : loopNest.loadStoreInfo.validPermuataions){
+    createRefGroups(&loopNest, perm);
+    std::cout<<"total cache misses: "<<computeCacheMisses(&loopNest, perm)<<"\n\n\n\n";
+		}
   }
 
   // Was trying to print out the operands of the block of the operand.
