@@ -495,18 +495,42 @@ static void getPerfectOrImperfectLoopNests(
     // AffineForOp)
     // and a terminator operation. Hence a (-2) in std::prev.
     if (body.begin() != std::prev(body.end(), 2)) {
-      // return;
-    }
-    // Checking if the first operation in body is an AffineForOP.
-    // If 'yes' continue, else if searching for perfect loop nests,
-    // stop search.
-    rootForOp = dyn_cast<AffineForOp>(&body.front());
-    if (!rootForOp) {
+		 /*	
+			std::cout<<"first condition fail: \n";
+			// Trying to make a copy of this for op.
+			mlir::OpBuilder builder(rootForOp.getParentOfType<FuncOp>().getBody());
+			auto lbMap = rootForOp.getLowerBoundMap();
+			SmallVector<Value, 4> lbOperands(rootForOp.getLowerBoundOperands());
+			augmentMapAndBounds(builder, rootForOp.getInductionVar(), &lbMap, &lbOperands);
+
+			auto forOp = builder.create<AffineForOp>();
       // I still want to continue the search. I want to set the rootForOp to the
       // next AffineForOp if any. Iterate this block and try to find an
       // AffinForOp.
       for (auto op = body.begin(); op != body.end(); op++) {
-        if (dyn_cast<AffineForOp>(*op)) {
+        if (isa<AffineForOp>(*op)) {
+					std::cout<<"for Loop found: \n";
+          rootForOp = dyn_cast<AffineForOp>(*op);
+          break;
+        }
+      }
+			if(rootForOp)
+				continue;
+			*/
+      // return;
+    }
+    // Checking if the first operation in body is an AffineForOP.
+    // If 'yes' continue, else if searching for perfect loop nests,
+    // stop search. if the nest operation is not an affine for op then 
+    // body loop is imperfeclty nested.
+    rootForOp = dyn_cast<AffineForOp>(&body.front());
+    if (!rootForOp) {
+		//	std::cout<<"second condition fail: \n";
+      // I still want to continue the search. I want to set the rootForOp to the
+      // next AffineForOp if any. Iterate this block and try to find an
+      // AffinForOp.
+      for (auto op = body.begin(); op != body.end(); op++) {
+        if (isa<AffineForOp>(*op)) {
           rootForOp = dyn_cast<AffineForOp>(*op);
           break;
         }
@@ -1049,13 +1073,15 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest, std::v
 			unsigned cls = 64 / (width / 8);
     // 1-D access matrix needs to be handeled sperately.
     if (accessMatrix.size() == 1) {
-      for (int j = accessMatrix[0].size() - 1; j >= 0; j--) {
+			int j;
+      for  (j = accessMatrix[0].size() - 1; j >= 0; j--) {
         lb = loopNest->loops[permuteMap[j]].getConstantLowerBound();
         ub = loopNest->loops[permuteMap[j]].getConstantUpperBound();
         loopStep = loopNest->loops[permuteMap[j]].getStep();
         iter = ((ub - 1) - lb + loopStep) / loopStep;
         stride = loopStep * accessMatrix[accessMatrix.size() - 1][permuteMap[j]];
         if (accessMatrix[0][permuteMap[j]] == 0) {
+					std::cout<<"last element is zero: \n";
           // If last element is zero then cost is 1.
           cost *= 1;
         } else {
@@ -1063,14 +1089,27 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest, std::v
           // encountered. If the 'stride' is less than 'cls' then some spatial
           // re-use is present.
           if (stride < cls) {
+						std::cout<<"last element is lt cls: \n";
             cost *= ((iter / cls) / (stride));
+						// break here because all the iterations after point will have n-misses.
+						break;
           }
           // If not then no spatial reuse is present and all will be misses.
           else {
+						std::cout<<"last element is gt cls: \n";
             cost *= iter;
+						// break here because all the iterations after point will have n-misses.
+						break;
           }
         }
       }
+			for (int l = j - 1; l >= 0; l--) {
+				lb = loopNest->loops[permuteMap[l]].getConstantLowerBound();
+				ub = loopNest->loops[permuteMap[l]].getConstantUpperBound();
+				loopStep = loopNest->loops[permuteMap[l]].getStep();
+				iter = ((ub - 1) - lb + loopStep) / loopStep;
+				cost *= iter;
+			}
       loopNest->loadStoreInfo.loadsAndStores[refGroupInx]->getLoc().dump();
       std::cout << "access matrix cost: " << cost << "\n";
 			totalCost += cost;
@@ -1398,7 +1437,7 @@ void AffineLoopTransform::runOnFunction() {
   for (auto &loopNest : perfectLoopNests) {
 		for(auto perm : loopNest.loadStoreInfo.validPermuataions){
     createRefGroups(&loopNest, perm);
-    std::cout<<"total cache misses: "<<computeCacheMisses(&loopNest, perm)<<"\n\n\n\n";
+    computeCacheMisses(&loopNest, perm); std::cout<<"\n\n\n\n";
 		}
   }
 
