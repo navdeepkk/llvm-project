@@ -1,15 +1,5 @@
-//===- AffineLoopTransform.cpp - Test dep analysis ------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-// This file implements a pass to run pair-wise memref access dependence checks.
-//
-//===----------------------------------------------------------------------===//
-
+//===- AffineLoopTransform.cpp - Does affineloop transformations for paralellism
+// and locality ------------------===//
 #include "iostream"
 #include "math.h"
 #include "mlir/Analysis/AffineAnalysis.h"
@@ -23,6 +13,7 @@
 #include "mlir/Transforms/LoopUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Debug.h"
+#include "unordered_map"
 
 #define DEBUG_TYPE "affine-loop-transform"
 
@@ -105,14 +96,17 @@ double computeSpatialScore(std::vector<SmallVector<int64_t, 8>> accessMatrix,
 struct AffineLoopTransform
     : public PassWrapper<AffineLoopTransform, FunctionPass> {
   typedef struct {
-    // Encodes if the loop is rectangular or not.
+    // Encodes if the loop nest is rectangular or not.
     bool isRectangular = true;
+		// Encodes info is the loop nest has IfElse or not.
+		bool containsIfElse = false;
     // Encodes info of all loads and stores.
     typedef struct {
       SmallVector<Operation *, 4> loadsAndStores;
       std::vector<std::vector<SmallVector<int64_t, 8>>> B;
       std::vector<std::vector<SmallVector<int64_t, 8>>> b;
       std::vector<SmallVector<Operation *, 4>> refGroups;
+			std::unordered_map<int64_t, bool> paralellLoops;
       std::vector<unsigned> ranks;
       std::vector<double> temporalScores;
       typedef struct {
@@ -136,7 +130,7 @@ struct AffineLoopTransform
       SmallVector<SmallVector<int64_t, 4>, 4> dependenceMatrix;
       // Captures all valid interchange Permutations.
       std::vector<std::vector<int64_t>> validPermuataions;
-      llvm::DenseMap<int, int> permScore;
+      std::vector<std::pair<std::vector<int64_t>, double>> permScores;
       // Utility to insert into dependeces.
       void insertIntoDependences(
           SmallVector<DependenceComponent, 2> dependenceComponents,
@@ -173,7 +167,6 @@ struct AffineLoopTransform
   } LoopInfo;
   // Captures all perfect loops present in the IR.
   std::vector<LoopInfo> perfectLoopNests;
-  std::vector<LoopInfo> imperfectLoopNests;
   void runOnFunction() override;
 };
 
@@ -495,37 +488,38 @@ static void getPerfectOrImperfectLoopNests(
     // AffineForOp)
     // and a terminator operation. Hence a (-2) in std::prev.
     if (body.begin() != std::prev(body.end(), 2)) {
-		 /*	
-			std::cout<<"first condition fail: \n";
-			// Trying to make a copy of this for op.
-			mlir::OpBuilder builder(rootForOp.getParentOfType<FuncOp>().getBody());
-			auto lbMap = rootForOp.getLowerBoundMap();
-			SmallVector<Value, 4> lbOperands(rootForOp.getLowerBoundOperands());
-			augmentMapAndBounds(builder, rootForOp.getInductionVar(), &lbMap, &lbOperands);
+      /*
+             std::cout<<"first condition fail: \n";
+             // Trying to make a copy of this for op.
+             mlir::OpBuilder
+builder(rootForOp.getParentOfType<FuncOp>().getBody()); auto lbMap =
+rootForOp.getLowerBoundMap(); SmallVector<Value, 4>
+lbOperands(rootForOp.getLowerBoundOperands()); augmentMapAndBounds(builder,
+rootForOp.getInductionVar(), &lbMap, &lbOperands);
 
-			auto forOp = builder.create<AffineForOp>();
-      // I still want to continue the search. I want to set the rootForOp to the
-      // next AffineForOp if any. Iterate this block and try to find an
-      // AffinForOp.
-      for (auto op = body.begin(); op != body.end(); op++) {
-        if (isa<AffineForOp>(*op)) {
-					std::cout<<"for Loop found: \n";
-          rootForOp = dyn_cast<AffineForOp>(*op);
-          break;
-        }
-      }
-			if(rootForOp)
-				continue;
-			*/
+             auto forOp = builder.create<AffineForOp>();
+// I still want to continue the search. I want to set the rootForOp to the
+// next AffineForOp if any. Iterate this block and try to find an
+// AffinForOp.
+for (auto op = body.begin(); op != body.end(); op++) {
+if (isa<AffineForOp>(*op)) {
+                             std::cout<<"for Loop found: \n";
+rootForOp = dyn_cast<AffineForOp>(*op);
+break;
+}
+}
+             if(rootForOp)
+                     continue;
+             */
       // return;
     }
     // Checking if the first operation in body is an AffineForOP.
     // If 'yes' continue, else if searching for perfect loop nests,
-    // stop search. if the nest operation is not an affine for op then 
+    // stop search. if the nest operation is not an affine for op then
     // body loop is imperfeclty nested.
     rootForOp = dyn_cast<AffineForOp>(&body.front());
     if (!rootForOp) {
-		//	std::cout<<"second condition fail: \n";
+      //	std::cout<<"second condition fail: \n";
       // I still want to continue the search. I want to set the rootForOp to the
       // next AffineForOp if any. Iterate this block and try to find an
       // AffinForOp.
@@ -545,15 +539,91 @@ static void getPerfectOrImperfectLoopNests(
 
 static void
 getLoopNests(FuncOp f, std::vector<AffineLoopTransform::LoopInfo> *loopNests) {
-  auto getImPerfectLoopNests = [&](AffineForOp root) {
+  auto getPerfectLoopNests = [&](AffineForOp root) {
     AffineLoopTransform::LoopInfo capturedLoops;
-    getPerfectOrImperfectLoopNests(capturedLoops.loops, root);
+    SmallVector<AffineForOp, 4> loops;
+    // getPerfectOrImperfectLoopNests(capturedLoops.loops, root);
+    // getPerfectlyNestedLoops(loops, root);
+    // Check if the loop nest was perfect.
+    bool isPerfectlyNested;
+		bool containsIfElse;
+		
+		// Walk the root and see if there is any nonRectangular loop.
+		root.walk([&](Operation *op) {
+			if (auto forOp = dyn_cast<AffineForOp>(op)) {	
+				if(!forOp.getConstantLowerBound() || !forOp.hasConstantUpperBound()){
+					// Simply return without capturing this loopnest and this loopnest 
+					// wont be processed.
+					return;	
+				}
+			}
+		});
+		
+		
+    while (1) {
+      loops.clear();
+      getPerfectlyNestedLoops(loops, root);
+      isPerfectlyNested = true;
+			containsIfElse = false;
+			// Walk the last captured loop and check if it is perfect or not.
+      AffineForOp innermostLoop = loops[loops.size() - 1];
+      innermostLoop.walk([&](Operation *op) {
+        if (isa<AffineForOp>(op) && op != innermostLoop) {
+          isPerfectlyNested = false;
+        }
+        if (isa<AffineIfOp>(op)) {
+					// check for affineIfOps, if present return and donot capture this loopnest.
+					containsIfElse = true;	
+				}
+      });
+			// If it contains an if statement then truly return.
+			if(containsIfElse)
+				return;
+			// If Loop is perfeclty nested then do nothing and break.
+      if (isPerfectlyNested)
+        break;
+      // If the nest was imperfect try to make it perfect.
+      if (!isPerfectlyNested) {
+        // Initialize an opBuilder and make a new loop where imperfection is
+        // found.
+        OpBuilder opb(innermostLoop.getOperation()->getBlock(),
+                      std::next(Block::iterator(innermostLoop.getOperation())));
+        AffineForOp newLoop;
+        newLoop = static_cast<AffineForOp>(opb.clone(*innermostLoop));
+        // Once a new loop is made then try to eliminate the immediate common
+        // even numbered children.
+        unsigned int counter = 0;
+        innermostLoop.walk([&](Operation *op) {
+          if (op->getParentOp() == innermostLoop && isa<AffineForOp>(op)) {
+            // Erase if alternate element.
+            if (counter % 2 == 0) {
+              op->erase();
+            }
+            ++counter;
+          }
+        });
+        // Do for the newly created for loop remove the odd numbered children.
+        counter = 0;
+        newLoop.walk([&](Operation *op) {
+          if (op->getParentOp() == newLoop && isa<AffineForOp>(op)) {
+            // Erase if alternate element.
+            if (counter % 2 == 1) {
+              op->erase();
+            }
+            ++counter;
+          }
+        });
+      }
+    }
+    // Push the loops found to the
+    capturedLoops.loops = loops;
     loopNests->push_back(capturedLoops);
   };
+  // Actual logic to make things work.
   for (auto &block : f)
     for (auto &op : block)
       if (auto forOp = dyn_cast<AffineForOp>(op))
-        getImPerfectLoopNests(forOp);
+        getPerfectLoopNests(forOp);
 }
 
 // Returns a result string which represents the direction vector (if there was
@@ -679,10 +749,10 @@ static void checkDependences(AffineLoopTransform::LoopInfo *loopNest) {
           } else {
             // Once the dependence is found insert it into a rarDependences
             // vector.
-            //std::cout << "static dependence: \n";
-            //srcOpInst->dump();
-            //dstOpInst->dump();
-            //std::cout << "static dependence: \n";
+            // std::cout << "static dependence: \n";
+            // srcOpInst->dump();
+            // dstOpInst->dump();
+            // std::cout << "static dependence: \n";
             loopNest->loadStoreInfo.insertIntoWrwDependences(
                 srcOpInst, dstOpInst, depVector);
           }
@@ -788,9 +858,9 @@ compareAccessMatrix(std::vector<SmallVector<int64_t, 8>> srcMatrix,
 
 static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
                             std::vector<int64_t> permuteMap) {
-	// At one time only one refGroup can be present.
-	// Clear refgroup before starting.
-	loopNest->loadStoreInfo.refGroups.clear();
+  // At one time only one refGroup can be present.
+  // Clear refgroup before starting.
+  loopNest->loadStoreInfo.refGroups.clear();
   // First create treat all the individual access as one reference group.
   // Initialize a boolvector 'isVisited' to mark all the loads/stores as not
   // visited.
@@ -802,8 +872,8 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
     toPush.clear();
     isVisited.push_back(false);
   }
-  //std::cout << "size before group creation: "
-         //   << loopNest->loadStoreInfo.refGroups.size() << std::endl;
+  // std::cout << "size before group creation: "
+  //   << loopNest->loadStoreInfo.refGroups.size() << std::endl;
 
   // Now refGroups has been intialized to contain  all accesses as individual
   // groups.
@@ -822,17 +892,19 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
     else {
       // std::cout<<"To continue: "<<toContinue<<"\n";
       isVisited[toContinue] = true;
-			// Find the size of cache line size.
-			auto loadOp = dyn_cast<AffineLoadOp>(loopNest->loadStoreInfo.loadsAndStores[toContinue]); 
-			auto storeOp = dyn_cast<AffineStoreOp>(loopNest->loadStoreInfo.loadsAndStores[toContinue]);
-			unsigned width;
-			if(loadOp){
-				width = loadOp.getMemRefType().getElementType().getIntOrFloatBitWidth(); 
-			}
-			else{
-				width = storeOp.getMemRefType().getElementType().getIntOrFloatBitWidth(); 
-			}
-			unsigned cls = 64 / (width / 8);
+      // Find the size of cache line size.
+      auto loadOp = dyn_cast<AffineLoadOp>(
+          loopNest->loadStoreInfo.loadsAndStores[toContinue]);
+      auto storeOp = dyn_cast<AffineStoreOp>(
+          loopNest->loadStoreInfo.loadsAndStores[toContinue]);
+      unsigned width;
+      if (loadOp) {
+        width = loadOp.getMemRefType().getElementType().getIntOrFloatBitWidth();
+      } else {
+        width =
+            storeOp.getMemRefType().getElementType().getIntOrFloatBitWidth();
+      }
+      unsigned cls = 64 / (width / 8);
       // Now we have the index of the operation. I can go ahead and see if this
       // opertion has same access function as that of some other group, except
       // itself.
@@ -879,13 +951,13 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
             if (((dep.srcOpInst == srcOpInst && dep.dstOpInst == dstOpInst) ||
                  (dep.srcOpInst == dstOpInst && dep.dstOpInst == srcOpInst)) &&
                 (srcOpInst != dstOpInst)) {
-              //std::cout << "RAR dep found: \n";
-              //srcOpInst->getLoc().dump();
-              //dstOpInst->getLoc().dump();
-              //for (auto dep : dep.dependence) {
+              // std::cout << "RAR dep found: \n";
+              // srcOpInst->getLoc().dump();
+              // dstOpInst->getLoc().dump();
+              // for (auto dep : dep.dependence) {
               //  std::cout << dep << " ";
               //}
-              //std::cout << "\n";
+              // std::cout << "\n";
               // Check for temproal resue. if only varies in the last dimension
               // of the dependence only then we can say that temporal reuse is
               // present.
@@ -894,7 +966,7 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
                 if (dep.dependence[permuteMap[i]] != 0)
                   isZero = false;
               }
-              //std::cout << "isZero after temporal check: " << isZero << "\n";
+              // std::cout << "isZero after temporal check: " << isZero << "\n";
               // if all the elements are 0 uptil the last element then temporal
               // reuse is present.
               if (isZero) {
@@ -924,13 +996,13 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
                    (dep.srcOpInst == dstOpInst &&
                     dep.dstOpInst == srcOpInst)) &&
                   (srcOpInst != dstOpInst)) {
-                //std::cout << "wrw dep found: \n";
-                //srcOpInst->getLoc().dump();
-                //dstOpInst->getLoc().dump();
-                //for (auto dep : dep.dependence) {
-                  //std::cout << dep << " ";
+                // std::cout << "wrw dep found: \n";
+                // srcOpInst->getLoc().dump();
+                // dstOpInst->getLoc().dump();
+                // for (auto dep : dep.dependence) {
+                // std::cout << dep << " ";
                 //}
-                //std::cout << "\n";
+                // std::cout << "\n";
                 // Check for temproal resue. if only varies in the last
                 // dimension of the dependence only then we can say that
                 // temporal reuse is present.
@@ -947,7 +1019,7 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
                     toGroup = true;
                     break;
                   }
-                  //std::cout << "toGroup at rar " << toGroup << "\n";
+                  // std::cout << "toGroup at rar " << toGroup << "\n";
                 }
               }
             }
@@ -958,7 +1030,7 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
             // and only the entry corresponding to the last loop varies by a
             // small amount(cls)
             if (!toGroup) {
-              //std::cout << "not grouped until now, last try: \n";
+              // std::cout << "not grouped until now, last try: \n";
               // We already know th access matrix are the same. just check the
               // last value in the matrix and see if the constants just vary by
               // a small constant.
@@ -986,13 +1058,13 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
         // If to group is set then the elements can be mergerd nto one group
         // erase from the vector adn insert into the refGroup and then break the
         // loop.
-        //std::cout << "toGroup at end " << toGroup << "\n";
+        // std::cout << "toGroup at end " << toGroup << "\n";
         if (toGroup) {
           // Find the RefGroup which has the element loadsAndStores[toContinue]
           // and delete it.
-          //std::cout << "size before entry deletion: "
+          // std::cout << "size before entry deletion: "
           //          << loopNest->loadStoreInfo.refGroups.size() << "\n";
-          //loopNest->loadStoreInfo.loadsAndStores[toContinue]->getLoc().dump();
+          // loopNest->loadStoreInfo.loadsAndStores[toContinue]->getLoc().dump();
           unsigned refGroupInx;
           bool flag = false;
           for (refGroupInx = 0;
@@ -1014,17 +1086,17 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
               loopNest->loadStoreInfo.refGroups.begin() + refGroupInx);
           // Mark the thing in RefGroup as visited.
           isVisited[repInx] = true;
-          //std::cout << "size after entry deletion: "
+          // std::cout << "size after entry deletion: "
           //          << loopNest->loadStoreInfo.refGroups.size() << "\n";
           break;
         }
       }
     }
   }
-	std::cout<<"permutatiopn: \n";
-	for(auto x: permuteMap)
-		std::cout<<x<<" ";
-	std::cout<<std::endl;
+  std::cout << "permutatiopn: \n";
+  for (auto x : permuteMap)
+    std::cout << x << " ";
+  std::cout << std::endl;
   std::cout << "size after group creation: "
             << loopNest->loadStoreInfo.refGroups.size() << std::endl;
   for (auto refGroup : loopNest->loadStoreInfo.refGroups) {
@@ -1036,7 +1108,8 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
   }
 }
 
-static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest, std::vector<int64_t> permuteMap) {
+static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
+                                 std::vector<int64_t> permuteMap) {
   // Iterate through the representative of the refGroups and start calculating
   // cache miss for each refGroup.
   double totalCost = 0.0f;
@@ -1046,7 +1119,7 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest, std::v
     // Initialize the cost of the Ref Group to be 1.
     cost = 1.0f;
     // TODO: currently taking the first element as the representative of the
-    // refGroup. 
+    // refGroup.
     // Find the first element in load/store list.
     unsigned refGroupInx;
     for (refGroupInx = 0;
@@ -1060,28 +1133,30 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest, std::v
     // last column to the first column.
     std::vector<SmallVector<int64_t, 8>> accessMatrix =
         loopNest->loadStoreInfo.B[refGroupInx];
-			// Find the size of cache line size.
-			auto loadOp = dyn_cast<AffineLoadOp>(loopNest->loadStoreInfo.loadsAndStores[refGroupInx]); 
-			auto storeOp = dyn_cast<AffineStoreOp>(loopNest->loadStoreInfo.loadsAndStores[refGroupInx]);
-			unsigned width;
-			if(loadOp){
-				width = loadOp.getMemRefType().getElementType().getIntOrFloatBitWidth(); 
-			}
-			else{
-				width = storeOp.getMemRefType().getElementType().getIntOrFloatBitWidth(); 
-			}
-			unsigned cls = 64 / (width / 8);
+    // Find the size of cache line size.
+    auto loadOp = dyn_cast<AffineLoadOp>(
+        loopNest->loadStoreInfo.loadsAndStores[refGroupInx]);
+    auto storeOp = dyn_cast<AffineStoreOp>(
+        loopNest->loadStoreInfo.loadsAndStores[refGroupInx]);
+    unsigned width;
+    if (loadOp) {
+      width = loadOp.getMemRefType().getElementType().getIntOrFloatBitWidth();
+    } else {
+      width = storeOp.getMemRefType().getElementType().getIntOrFloatBitWidth();
+    }
+    unsigned cls = 64 / (width / 8);
     // 1-D access matrix needs to be handeled sperately.
     if (accessMatrix.size() == 1) {
-			int j;
-      for  (j = accessMatrix[0].size() - 1; j >= 0; j--) {
+      int j;
+      for (j = accessMatrix[0].size() - 1; j >= 0; j--) {
         lb = loopNest->loops[permuteMap[j]].getConstantLowerBound();
         ub = loopNest->loops[permuteMap[j]].getConstantUpperBound();
         loopStep = loopNest->loops[permuteMap[j]].getStep();
         iter = ((ub - 1) - lb + loopStep) / loopStep;
-        stride = loopStep * accessMatrix[accessMatrix.size() - 1][permuteMap[j]];
+        stride =
+            loopStep * accessMatrix[accessMatrix.size() - 1][permuteMap[j]];
         if (accessMatrix[0][permuteMap[j]] == 0) {
-					std::cout<<"last element is zero: \n";
+          std::cout << "last element is zero: \n";
           // If last element is zero then cost is 1.
           cost *= 1;
         } else {
@@ -1089,30 +1164,32 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest, std::v
           // encountered. If the 'stride' is less than 'cls' then some spatial
           // re-use is present.
           if (stride < cls) {
-						std::cout<<"last element is lt cls: \n";
+            std::cout << "last element is lt cls: \n";
             cost *= ((iter / cls) / (stride));
-						// break here because all the iterations after point will have n-misses.
-						break;
+            // break here because all the iterations after point will have
+            // n-misses.
+            break;
           }
           // If not then no spatial reuse is present and all will be misses.
           else {
-						std::cout<<"last element is gt cls: \n";
+            std::cout << "last element is gt cls: \n";
             cost *= iter;
-						// break here because all the iterations after point will have n-misses.
-						break;
+            // break here because all the iterations after point will have
+            // n-misses.
+            break;
           }
         }
       }
-			for (int l = j - 1; l >= 0; l--) {
-				lb = loopNest->loops[permuteMap[l]].getConstantLowerBound();
-				ub = loopNest->loops[permuteMap[l]].getConstantUpperBound();
-				loopStep = loopNest->loops[permuteMap[l]].getStep();
-				iter = ((ub - 1) - lb + loopStep) / loopStep;
-				cost *= iter;
-			}
+      for (int l = j - 1; l >= 0; l--) {
+        lb = loopNest->loops[permuteMap[l]].getConstantLowerBound();
+        ub = loopNest->loops[permuteMap[l]].getConstantUpperBound();
+        loopStep = loopNest->loops[permuteMap[l]].getStep();
+        iter = ((ub - 1) - lb + loopStep) / loopStep;
+        cost *= iter;
+      }
       loopNest->loadStoreInfo.loadsAndStores[refGroupInx]->getLoc().dump();
       std::cout << "access matrix cost: " << cost << "\n";
-			totalCost += cost;
+      totalCost += cost;
       continue;
     }
     for (int j = accessMatrix[0].size() - 1; j >= 0; j--) {
@@ -1167,16 +1244,76 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest, std::v
     }
     loopNest->loadStoreInfo.loadsAndStores[refGroupInx]->getLoc().dump();
     std::cout << "access matrix cost: " << cost << "\n";
-		totalCost += cost;
+    totalCost += cost;
   }
-	return totalCost;
+  return totalCost;
 }
+
+static bool sortByVal(std::pair<std::vector<int64_t>, double> &a,
+               std::pair<std::vector<int64_t>, double> &b) {
+  return (a.second < b.second);
+}
+
+static void findParalellLoops(AffineLoopTransform::LoopInfo * loopNest){
+	// Traverse the dependence matrix column-wise and check if the loop is parallel.
+	// A Loop is paralell if it does not carry any dependence, i.e. all entries in the col are 0.
+	SmallVector<SmallVector<int64_t, 4>, 4> & dependenceMatrix = loopNest->loadStoreInfo.dependenceMatrix;
+	unsigned short r = dependenceMatrix.size();
+	unsigned short c = dependenceMatrix[0].size();
+  // For the case when no dependence is present.	
+	if(r == 0){
+		for(unsigned i = 0; i < loopNest->loops.size(); ++i){
+			loopNest->loadStoreInfo.paralellLoops[i] = true;	
+		}	
+	return;		
+	}
+
+	bool isParallel;
+	for(auto j = 0; j < c; ++j){
+		isParallel = true;
+		for(auto i = 0; i < r; ++i){
+			if(dependenceMatrix[i][j] != 0)	
+				isParallel = false;
+			}
+			loopNest->loadStoreInfo.paralellLoops[j] = isParallel;
+		}
+	}
 
 void AffineLoopTransform::runOnFunction() {
   // Collect the loads and stores within the function.
   //  loadsAndStores.clear();
-  // Find all Perfectly nested loops.
+  // Find all perfeclty nested loops. If the loops are not perfeclty nested
+  // the call tries to make the loops perfect following a simple algorithm.
   getLoopNests(getFunction(), &perfectLoopNests);
+
+  // Check if the Loop nest is a perfect nest or an imperfect nest.
+  // Walking the last loop of an imperfect loop nest will have atleast
+  // one affineforop.
+  /*
+  for(auto &loopNest : perfectLoopNests){
+  bool isPerfectlyNested = true;
+          AffineForOp innermostLoop = loopNest.loops[loopNest.loops.size() - 1];
+          innermostLoop.walk([&](Operation * op){
+          if(isa<AffineForOp>(op) && op != innermostLoop){
+                          isPerfectlyNested = false;
+                  }
+          });
+  if(!isPerfectlyNested){
+          OpBuilder
+  opb(innermostLoop.getOperation()->getBlock(),std::next(Block::iterator(innermostLoop.getOperation())));
+          AffineForOp newLoop;
+          newLoop = static_cast<AffineForOp>(opb.clone(*innermostLoop));
+  }
+          std::cout<<"isPerfectlyNested: "<<isPerfectlyNested<<std::endl;
+  }
+  */
+  // if loop is imperfeclty nested attwmpt to make it perfectly nested. by
+  // cloning and deleting inner loops one by one. This will involve repeated
+  // calls to the getperfectlynestedloops(). The current point of imperfection
+  // is known. try to clone it.
+
+  //-------------------------------------------------------------------------------------------------------------------------------
+
   // Find all Imperfectly nested loops.
   // getLoopNests(getFunction(), &imperfectLoopNests);
   // Print all the Perfectly nested loops.
@@ -1311,35 +1448,36 @@ void AffineLoopTransform::runOnFunction() {
   // The access matrix has been constructed at this point we can now go on and
   // compute static information(which will not change because ofinterchanges),
   // such as rank, score of temporal reuse for each access.
-/*
-	for (auto loopNest : perfectLoopNests) {
-    std::vector<double> permuteMap{1, 2, 3};
-    for (unsigned i = 0; i < loopNest.loadStoreInfo.loadsAndStores.size();
-         ++i) {
-      // Copy the access matrix into a vector<vector<float>>
-      std::vector<std::vector<double>> accessMatrix(
-          loopNest.loadStoreInfo.B[i].size(),
-          std::vector<double>(loopNest.loadStoreInfo.B[i][0].size()));
-      for (unsigned j = 0; j < loopNest.loadStoreInfo.B[i].size(); ++j) {
-        for (unsigned k = 0; k < loopNest.loadStoreInfo.B[i][j].size(); ++k) {
-          accessMatrix[j][k] = (double)loopNest.loadStoreInfo.B[i][j][k];
+  /*
+          for (auto loopNest : perfectLoopNests) {
+      std::vector<double> permuteMap{1, 2, 3};
+      for (unsigned i = 0; i < loopNest.loadStoreInfo.loadsAndStores.size();
+           ++i) {
+        // Copy the access matrix into a vector<vector<float>>
+        std::vector<std::vector<double>> accessMatrix(
+            loopNest.loadStoreInfo.B[i].size(),
+            std::vector<double>(loopNest.loadStoreInfo.B[i][0].size()));
+        for (unsigned j = 0; j < loopNest.loadStoreInfo.B[i].size(); ++j) {
+          for (unsigned k = 0; k < loopNest.loadStoreInfo.B[i][j].size(); ++k) {
+            accessMatrix[j][k] = (double)loopNest.loadStoreInfo.B[i][j][k];
+          }
         }
+        // Compute rank.
+        loopNest.loadStoreInfo.ranks.push_back(computeRank(accessMatrix));
+        std::cout << "Rank is: " << loopNest.loadStoreInfo.ranks[i] << "\n";
+        loopNest.loadStoreInfo.temporalScores.push_back(
+            computeTemporalScore(loopNest.loadStoreInfo.B[i]));
+        // Computing score for temporal re-use.
+        std::cout << "Temporal Score is: "
+                  << loopNest.loadStoreInfo.temporalScores[i] << "\n";
+        // Computing score for Spatial re-use.
+        std::cout << "Spatial Score is: "
+                  << computeSpatialScore(loopNest.loadStoreInfo.B[i],
+    permuteMap)
+                  << "\n";
       }
-      // Compute rank.
-      loopNest.loadStoreInfo.ranks.push_back(computeRank(accessMatrix));
-      std::cout << "Rank is: " << loopNest.loadStoreInfo.ranks[i] << "\n";
-      loopNest.loadStoreInfo.temporalScores.push_back(
-          computeTemporalScore(loopNest.loadStoreInfo.B[i]));
-      // Computing score for temporal re-use.
-      std::cout << "Temporal Score is: "
-                << loopNest.loadStoreInfo.temporalScores[i] << "\n";
-      // Computing score for Spatial re-use.
-      std::cout << "Spatial Score is: "
-                << computeSpatialScore(loopNest.loadStoreInfo.B[i], permuteMap)
-                << "\n";
     }
-  }
-*/
+  */
   // TODO: add things for the computation of group spatial/temporal resuse.
 
   // Seems things needed are in hand so we can go on to compute the depepndence
@@ -1435,12 +1573,71 @@ void AffineLoopTransform::runOnFunction() {
   // I think the dependeces in RARDependence are pruned i can start with algo of
   // creating refGroups.
   for (auto &loopNest : perfectLoopNests) {
-		for(auto perm : loopNest.loadStoreInfo.validPermuataions){
-    createRefGroups(&loopNest, perm);
-    computeCacheMisses(&loopNest, perm); std::cout<<"\n\n\n\n";
-		}
+    for (auto perm : loopNest.loadStoreInfo.validPermuataions) {
+      createRefGroups(&loopNest, perm);
+      auto totalCost = computeCacheMisses(&loopNest, perm);
+      std::cout << "Total cost:" << totalCost;
+      // Store scores in SmallVector and then sort them in the order of
+      // inceasing cache misses.
+      loopNest.loadStoreInfo.permScores.push_back(
+          std::make_pair(perm, totalCost));
+      std::sort(loopNest.loadStoreInfo.permScores.begin(),
+                loopNest.loadStoreInfo.permScores.end(), sortByVal);
+      std::cout << "\n\n\n\n";
+    }
   }
 
+	// Just print the scores here. TODO: Remove this piece at last.
+  for (auto &loopNest : perfectLoopNests) {
+    for (auto elem : loopNest.loadStoreInfo.permScores) {
+      std::cout << "perm: ";
+      for (auto comp : elem.first) {
+        std::cout << comp << " ";
+      }
+      std::cout << "second: " << elem.second << " ";
+    }
+    std::cout << "\n";
+  }
+	
+	// Find all paralell loops in the loopNests.
+  for (auto &loopNest : perfectLoopNests) {
+		findParalellLoops(&loopNest);
+	}
+		
+	// After parallell loops are found we can just find the best permutation.	
+  for (auto &loopNest : perfectLoopNests) {
+    for (auto &perm : loopNest.loadStoreInfo.permScores) {
+			bool isPermuted = false;	
+			for(auto loopInx : perm.first){
+				// Check if the loop at loopInx is parallel in the chosen perm.
+				if(loopNest.loadStoreInfo.paralellLoops[perm.first[loopInx]]){
+					// TODO: Verify if this approach is corrrect.
+					// choose this permutation as the answer permute the loops and break.
+					// First construct the permuteMap.
+					std::vector<unsigned int> permMap(perm.first.size());
+					for(unsigned inx = 0; inx < perm.first.size();  ++inx){
+						permMap[perm.first[inx]] = inx;	
+					}
+					// Permute the loops
+					permuteLoops(loopNest.loops, permMap);
+					isPermuted = true;
+					break;
+				}
+			}
+	}	
+}
+	
+/*
+  for (auto &loopNest : perfectLoopNests) {
+    std::vector<unsigned int> a;
+    a.push_back(1);
+    a.push_back(2);
+    a.push_back(0);
+		//interchangeLoops(loopNest.loops[1], loopNest.loops[2]);
+		//interchangeLoops(loopNest.loops[0], loopNest.loops[2]);
+    permuteLoops(loopNest.loops, a);
+  }
+*/
   // Was trying to print out the operands of the block of the operand.
   // Commenting out for now.
   /*
