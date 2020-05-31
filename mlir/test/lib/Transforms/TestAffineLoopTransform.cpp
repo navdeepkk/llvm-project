@@ -161,8 +161,9 @@ struct AffineLoopTransform
         wrwDependences.push_back(toInsert);
       }
     } LoadStoreInfo;
+		// Captures info of all loads/stores in a loop nest.
     LoadStoreInfo loadStoreInfo;
-    // Encodes info of all loops ina loop nest.
+    // Encodes info of all loops in a loop nest.
     SmallVector<AffineForOp, 4> loops;
   } LoopInfo;
   // Captures all perfect loops present in the IR.
@@ -547,6 +548,7 @@ getLoopNests(FuncOp f, std::vector<AffineLoopTransform::LoopInfo> *loopNests) {
     // Check if the loop nest was perfect.
     bool isPerfectlyNested;
     bool containsIfElse;
+    bool hasImmediateLoadStore;
 
     // Walk the root and see if there is any nonRectangular loop.
     root.walk([&](Operation *op) {
@@ -562,25 +564,31 @@ getLoopNests(FuncOp f, std::vector<AffineLoopTransform::LoopInfo> *loopNests) {
     while (1) {
       loops.clear();
       getPerfectlyNestedLoops(loops, root);
-			for(auto loop : loops){
-				loop.dump();
-			}
+      /*
+      for(auto loop : loops){
+              loop.dump();
+      }
+      */
       isPerfectlyNested = true;
       containsIfElse = false;
+      hasImmediateLoadStore = false;
       // Walk the last captured loop and check if it is perfect or not.
       AffineForOp innermostLoop = loops[loops.size() - 1];
       innermostLoop.walk([&](Operation *op) {
         if (isa<AffineForOp>(op) && op != innermostLoop) {
           isPerfectlyNested = false;
-        }
-        if (isa<AffineIfOp>(op)) {
+        } else if (isa<AffineIfOp>(op)) {
           // check for affineIfOps, if present return and donot capture this
           // loopnest.
           containsIfElse = true;
+        } else if ((isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op)) &&
+                   (op->getParentOp() == innermostLoop)) {
+          hasImmediateLoadStore = true;
         }
       });
-      // If it contains an if statement then truly return.
-      if (containsIfElse)
+      // If it contains an if statement then truly return, this condtiotn means
+      // this loop nest is not to be processed.
+      if (containsIfElse || (!isPerfectlyNested && hasImmediateLoadStore))
         return;
       // If Loop is perfeclty nested then do nothing and break.
       if (isPerfectlyNested)
@@ -593,24 +601,38 @@ getLoopNests(FuncOp f, std::vector<AffineLoopTransform::LoopInfo> *loopNests) {
                       std::next(Block::iterator(innermostLoop.getOperation())));
         AffineForOp newLoop;
         newLoop = static_cast<AffineForOp>(opb.clone(*innermostLoop));
-        // Oncea new loop is made then try to eliminate the immediate common
-        // even numbered children.
-        unsigned int counter = 0;
+        // Once a new loop is made then try to eliminate the immediate forOp
+        // children.
+        unsigned int counter;
+        unsigned int numForOps = 0;
+        // Count number of affineForOps in the nest.
+        innermostLoop.walk([&](Operation *op) {
+          if (op->getParentOp() == innermostLoop && isa<AffineForOp>(op)) {
+            ++numForOps;
+          }
+        });
+        // std::cout<<"num for ops: "<<numForOps<<"\n";
+        // Walk to remove the first half from the first nest.
+        counter = 0;
+        // std::cout<<"innermost loop befor: \n";
+        innermostLoop.dump();
         innermostLoop.walk([&](Operation *op) {
           if (op->getParentOp() == innermostLoop && isa<AffineForOp>(op)) {
             // Erase if alternate element.
-            if (counter % 2 == 1) {
+            if (counter >= ceil(numForOps / 2) && (counter < numForOps)) {
               op->erase();
             }
             ++counter;
           }
         });
-        // Do for the newly created for loop remove the odd numbered children.
+        // std::cout<<"innermost loop after: \n";
+        innermostLoop.dump();
+        // Walk to remove second half from second nest.
         counter = 0;
         newLoop.walk([&](Operation *op) {
           if (op->getParentOp() == newLoop && isa<AffineForOp>(op)) {
             // Erase if alternate element.
-            if (counter % 2 == 0) {
+            if (counter < ceil(numForOps / 2)) {
               op->erase();
             }
             ++counter;
@@ -1096,21 +1118,21 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
       }
     }
   }
-/*
-  std::cout << "permutatiopn: \n";
-  for (auto x : permuteMap)
-    std::cout << x << " ";
-  std::cout << std::endl;
-  std::cout << "size after group creation: "
-            << loopNest->loadStoreInfo.refGroups.size() << std::endl;
-  for (auto refGroup : loopNest->loadStoreInfo.refGroups) {
-    std::cout << "refgroup start:\n";
-    for (auto ls : refGroup) {
-      ls->getLoc().dump();
+  /*
+    std::cout << "permutatiopn: \n";
+    for (auto x : permuteMap)
+      std::cout << x << " ";
+    std::cout << std::endl;
+    std::cout << "size after group creation: "
+              << loopNest->loadStoreInfo.refGroups.size() << std::endl;
+    for (auto refGroup : loopNest->loadStoreInfo.refGroups) {
+      std::cout << "refgroup start:\n";
+      for (auto ls : refGroup) {
+        ls->getLoc().dump();
+      }
+      std::cout << "refgroup end:\n";
     }
-    std::cout << "refgroup end:\n";
-  }
-*/
+  */
 }
 static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
                                  std::vector<int64_t> permuteMap) {
@@ -1290,7 +1312,8 @@ void AffineLoopTransform::runOnFunction() {
   // Find all perfeclty nested loops. If the loops are not perfeclty nested
   // the call tries to make the loops perfect following a simple algorithm.
   getLoopNests(getFunction(), &perfectLoopNests);
-	return;
+  std::cout << "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+            << perfectLoopNests.size();
   // Check if the Loop nest is a perfect nest or an imperfect nest.
   // Walking the last loop of an imperfect loop nest will have atleast
   // one affineforop.
@@ -1610,13 +1633,13 @@ void AffineLoopTransform::runOnFunction() {
     findParalellLoops(&loopNest);
   }
 
-/*
-  for (auto &loopNest : perfectLoopNests) {
-    for (auto loop : loopNest.loops) {
-			loop.dump();
-	}
-}
-*/
+  /*
+    for (auto &loopNest : perfectLoopNests) {
+      for (auto loop : loopNest.loops) {
+                          loop.dump();
+          }
+  }
+  */
   // After parallel loops are found we can just find the best permutation.
   for (auto &loopNest : perfectLoopNests) {
     bool isPermuted = false;
@@ -1630,24 +1653,22 @@ void AffineLoopTransform::runOnFunction() {
         for (unsigned inx = 0; inx < perm.first.size(); ++inx) {
           permMap[perm.first[inx]] = inx;
         }
-        // Permute the loops
-        //loopNest.loops[0].dump();
-        //loopNest.loops[1].dump();
-        //loopNest.loops[2].dump();
         permuteLoops(loopNest.loops, permMap);
         isPermuted = true;
         break;
       }
     }
-      std::vector<unsigned int> permMap(loopNest.loadStoreInfo.permScores[0].first.size());
-      if (!isPermuted) {
-        // Choose the first permutation as the interchange permutation.
-        for (unsigned inx = 0; inx < loopNest.loadStoreInfo.permScores[0].first.size(); ++inx) {
-          permMap[loopNest.loadStoreInfo.permScores[0].first[inx]] = inx;
-        }
-        // Permute the loops
-        permuteLoops(loopNest.loops, permMap);
+    std::vector<unsigned int> permMap(
+        loopNest.loadStoreInfo.permScores[0].first.size());
+    if (!isPermuted) {
+      // Choose the first permutation as the interchange permutation.
+      for (unsigned inx = 0;
+           inx < loopNest.loadStoreInfo.permScores[0].first.size(); ++inx) {
+        permMap[loopNest.loadStoreInfo.permScores[0].first[inx]] = inx;
       }
+      // Permute the loops
+      permuteLoops(loopNest.loops, permMap);
+    }
   }
 
   /*
@@ -1744,7 +1765,7 @@ llvm::outs() << "Imperfect loop in nest at: " << loop.getLoc() << "\n";
 namespace mlir {
 void registerAffineLoopTransform() {
   PassRegistration<AffineLoopTransform> pass(
-      "affine-loop-transform", "Perform affine loop transformations, "
+      "affine-loop-interchange", "Perform affine loop transformations, "
                                "optimizing locality and paralellism.");
 }
 } // namespace mlir
