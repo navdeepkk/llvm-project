@@ -655,49 +655,49 @@ compareAccessMatrix(std::vector<SmallVector<int64_t, 8>> srcMatrix,
   }
   return isEqual;
 }
-template<typename	T>
-static void checkForTemporalReuse(AffineLoopTransform::LoopInfo *loopNest, mlir::Operation *srcOpInst, mlir::Operation *dstOpInst,T depVector,std::vector<int64_t> permuteMap, bool &toGroup){
+template <typename T>
+static void checkForTemporalReuse(AffineLoopTransform::LoopInfo *loopNest,
+                                  mlir::Operation *srcOpInst,
+                                  mlir::Operation *dstOpInst, T depVector,
+                                  std::vector<int64_t> permuteMap,
+                                  bool &toGroup) {
 
-          for (auto &dep : depVector) {
-            // Solution exists for if true. We can then check if spatial or
-            // temporal is present.
-            if (((dep.srcOpInst == srcOpInst && dep.dstOpInst == dstOpInst) ||
-                 (dep.srcOpInst == dstOpInst && dep.dstOpInst == srcOpInst)) &&
-                (srcOpInst != dstOpInst)) {
-              // Check for temproal resue. if only varies in the last dimension
-              // of the dependence only then we can say that temporal reuse is
-              // present.
-              bool isZero = true;
-              for (unsigned i = 0; i < dep.dependence.size() - 1; ++i) {
-                if (dep.dependence[permuteMap[i]] != 0)
-                  isZero = false;
-              }
-              // if all the elements are 0 uptil the last element then temporal
-              // reuse is present.
-              if (isZero) {
-                // TODO: add check for the condition given in paper for temporal
-                // reuse.
-                // The condition essentially means that temporal reuse can even
-                // be exploited if there is agap of atmost '2' between
-                // iterations.
-                if (abs(dep.dependence[permuteMap[dep.dependence.size() -
-                                                  1]]) <= 2) {
-                  toGroup = true;
-                  std::cout << "grouping because of temporal reuse and rar "
-                               "dependence is\n";
-                  for (auto comp : dep.dependence) {
-                    std::cout << comp << " ";
-                  }
-                  std::cout << "\n";
-                  break;
-                }
-              }
-            }
+  for (auto &dep : depVector) {
+    // Solution exists for if true. We can then check if spatial or
+    // temporal is present.
+    if (((dep.srcOpInst == srcOpInst && dep.dstOpInst == dstOpInst) ||
+         (dep.srcOpInst == dstOpInst && dep.dstOpInst == srcOpInst)) &&
+        (srcOpInst != dstOpInst)) {
+      // Check for temproal resue. if only varies in the last dimension
+      // of the dependence only then we can say that temporal reuse is
+      // present.
+      bool isZero = true;
+      for (unsigned i = 0; i < dep.dependence.size() - 1; ++i) {
+        if (dep.dependence[permuteMap[i]] != 0)
+          isZero = false;
+      }
+      // if all the elements are 0 uptil the last element then temporal
+      // reuse is present.
+      if (isZero) {
+        // TODO: add check for the condition given in paper for temporal
+        // reuse.
+        // The condition essentially means that temporal reuse can even
+        // be exploited if there is agap of atmost '2' between
+        // iterations.
+        if (abs(dep.dependence[permuteMap[dep.dependence.size() - 1]]) <= 2) {
+          toGroup = true;
+          std::cout << "grouping because of temporal reuse and rar "
+                       "dependence is\n";
+          for (auto comp : dep.dependence) {
+            std::cout << comp << " ";
           }
-
-
+          std::cout << "\n";
+          break;
+        }
+      }
+    }
+  }
 }
-
 
 static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
                             std::vector<int64_t> permuteMap) {
@@ -784,84 +784,18 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
           mlir::Operation *dstOpInst =
               loopNest->loadStoreInfo.loadsAndStores[toContinue];
           // First checking in RAR.
-          checkForTemporalReuse(loopNest, srcOpInst, dstOpInst, loopNest->loadStoreInfo.rarDependences, permuteMap, toGroup);
-         /* 
-          for (auto &dep : loopNest->loadStoreInfo.rarDependences){
-            // Solution exists for if true. We can then check if spatial or
-            // temporal is present.
-            if (((dep.srcOpInst == srcOpInst && dep.dstOpInst == dstOpInst) ||
-                 (dep.srcOpInst == dstOpInst && dep.dstOpInst == srcOpInst)) &&
-                (srcOpInst != dstOpInst)) {
-              // Check for temproal resue. if only varies in the last dimension
-              // of the dependence only then we can say that temporal reuse is
-              // present.
-              bool isZero = true;
-              for (unsigned i = 0; i < dep.dependence.size() - 1; ++i) {
-                if (dep.dependence[permuteMap[i]] != 0)
-                  isZero = false;
-              }
-              // if all the elements are 0 uptil the last element then temporal
-              // reuse is present.
-              if (isZero) {
-                // TODO: add check for the condition given in paper for temporal
-                // reuse.
-                // The condition essentially means that temporal reuse can even
-                // be exploited if there is agap of atmost '2' between
-                // iterations.
-                if (abs(dep.dependence[permuteMap[dep.dependence.size() -
-                                                  1]]) <= 2) {
-                  toGroup = true;
-                  std::cout << "grouping because of temporal reuse and rar "
-                               "dependence is\n";
-                  for (auto comp : dep.dependence) {
-                    std::cout << comp << " ";
-                  }
-                  std::cout << "\n";
-                  break;
-                }
-              }
-            }
-          }*/
+          checkForTemporalReuse(loopNest, srcOpInst, dstOpInst,
+                                loopNest->loadStoreInfo.rarDependences,
+                                permuteMap, toGroup);
           // If we have found that the group can be made then break. and dont
           // check for WRW, and then check if theere is no dependence but still
           // there is spatial re-use because of the last dimension just varying
           // a little(less than 'cls').
           if (!toGroup) {
-          checkForTemporalReuse(loopNest, srcOpInst, dstOpInst, loopNest->loadStoreInfo.wrwDependences, permuteMap, toGroup);
+            checkForTemporalReuse(loopNest, srcOpInst, dstOpInst,
+                                  loopNest->loadStoreInfo.wrwDependences,
+                                  permuteMap, toGroup);
             // then checking in WRW.
-            /*
-            for (auto dep : loopNest->loadStoreInfo.wrwDependences) {
-              // Solution exists for if true. We can then check if spatial or
-              // temporal is present.
-              if (((dep.srcOpInst == srcOpInst && dep.dstOpInst == dstOpInst) ||
-                   (dep.srcOpInst == dstOpInst &&
-                    dep.dstOpInst == srcOpInst)) &&
-                  (srcOpInst != dstOpInst)) {
-                // Check for temproal resue. if only varies in the last
-                // dimension of the dependence only then we can say that
-                // temporal reuse is present.
-                bool isZero = true;
-                for (unsigned i = 0; i < dep.dependence.size() - 1; ++i) {
-                  if (dep.dependence[permuteMap[i]] != 0)
-                    isZero = false;
-                }
-                // if all the elements are 0 uptil the last element then
-                // temporal reuse is present.
-                if (isZero) {
-                  if (abs(dep.dependence[permuteMap[dep.dependence.size() -
-                                                    1]]) <= 2) {
-                    toGroup = true;
-                    std::cout << "grouping because of temporal reuse and wrw "
-                                 "dependence is\n";
-                    for (auto comp : dep.dependence) {
-                      std::cout << comp << " ";
-                    }
-                    std::cout << "\n";
-                    break;
-                  }
-                }
-              }
-            }*/
             // Check here for the last condition where the access matrix are the
             // same, but there is no dependence but still we can pair the
             // elements because of spatial reuse being present. to check the
@@ -1131,11 +1065,20 @@ static void findParalellLoops(AffineLoopTransform::LoopInfo *loopNest) {
   }
 }
 
+static void makePerm(AffineLoopTransform::LoopInfo *loopNest, std::vector<int64_t> perm){
+		std::vector<unsigned int> permMap(perm.size());
+		for (unsigned inx = 0; inx < perm.size();
+				 ++inx) {
+			permMap[perm[inx]] = inx;
+		}
+		permuteLoops(loopNest->loops, permMap);
+
+}
+
 void AffineLoopTransform::runOnFunction() {
   // Find all perfeclty nested loops. If the loops are not perfeclty nested
   // the call tries to make the loops perfect following a simple algorithm.
   getLoopNests(getFunction(), &perfectLoopNests);
-
   // Find the loads/stores in loop nests.
   for (auto &loopNest : perfectLoopNests) {
     // check which is the parent for loop, once found walk that for loop.
@@ -1254,7 +1197,7 @@ void AffineLoopTransform::runOnFunction() {
       allPermutations.push_back(toGen);
     } while (std::next_permutation(toGen.begin(), toGen.end()));
 
-    // Eliminate all the impossibel dependences.
+    // Eliminate all the invalid dependences.
     eliminateInvalidDependence(&loopNest, allPermutations);
     std::cout << "no. of valid permutations: "
               << loopNest.loadStoreInfo.validPermuataions.size() << std::endl;
@@ -1291,20 +1234,6 @@ void AffineLoopTransform::runOnFunction() {
     toRemove.clear();
   }
 
-  for (auto &loopNest : perfectLoopNests) {
-    std::cout << "RAR dependeces are: \n";
-    for (unsigned i = 0; i < loopNest.loadStoreInfo.rarDependences.size();
-         i++) {
-      for (auto dep = 0;
-           dep < loopNest.loadStoreInfo.rarDependences[i].dependence.size();
-           ++dep) {
-        std::cout << loopNest.loadStoreInfo.rarDependences[i].dependence[dep]
-                  << " ";
-      }
-      std::cout << "\n";
-    }
-  }
-
   // I think the dependeces in RARDependence are pruned, I can start with algo
   // of creating refGroups.
   for (auto &loopNest : perfectLoopNests) {
@@ -1338,11 +1267,11 @@ void AffineLoopTransform::runOnFunction() {
   for (auto &loopNest : perfectLoopNests) {
     findParalellLoops(&loopNest);
   }
-  // Find all paralell loops in the loopNests.
+  // print all paralell loops in the loopNests.
   for (auto &loopNest : perfectLoopNests) {
-		for(auto loop : loopNest.loadStoreInfo.paralellLoops){
-			std::cout<<loop.first<<" "<<loop.second<<"\n";
-		}
+    for (auto loop : loopNest.loadStoreInfo.paralellLoops) {
+      std::cout << loop.first << " " << loop.second << "\n";
+    }
   }
 
   // After parallel loops are found we can just find the best permutation.
@@ -1352,23 +1281,20 @@ void AffineLoopTransform::runOnFunction() {
   // permutaion among these which benifits the largest group, i.e. choose the
   // permutation which has the minimum cost for the largest group.
 
-
-  for (auto &loopNest : perfectLoopNests) {	
-      for (auto perm : loopNest.loadStoreInfo.permRefGroups) {
-				std::cout<<"found permutatio: ";
-					for(auto x: perm.first.first)
-							std::cout<<x<<" ";
-					std::cout<<"----"<<perm.second;
-					std::cout<<"\n";
-			}
-		}
-
-
+  for (auto &loopNest : perfectLoopNests) {
+    for (auto perm : loopNest.loadStoreInfo.permRefGroups) {
+      std::cout << "found permutatio: ";
+      for (auto x : perm.first.first)
+        std::cout << x << " ";
+      std::cout << "----" << perm.second;
+      std::cout << "\n";
+    }
+  }
 
   for (auto &loopNest : perfectLoopNests) {
     bool isPermuted = false;
-    for (auto &perm: loopNest.loadStoreInfo.permScores) {
-//------------------------------------------------------------------------------------------------------------------------------------------//
+    for (auto &perm : loopNest.loadStoreInfo.permScores) {
+      //------------------------------------------------------------------------------------------------------------------------------------------//
       // check for fallback case.
       double minCost = perm.second;
       std::vector<std::pair<
@@ -1378,95 +1304,106 @@ void AffineLoopTransform::runOnFunction() {
           double>>
           minCostPerms;
       // Find the premutaions with min loop cost.
-      for (auto refGroup: loopNest.loadStoreInfo.permRefGroups) {
-        if (refGroup.second == minCost && (loopNest.loadStoreInfo.paralellLoops[refGroup.first.first[0]] == true) ) {
-				std::cout<<"checking permutatio: ";
-					for(auto x: refGroup.first.first)
-							std::cout<<x<<" ";
-					std::cout<<"\n";
-					// Adding only the permutations into the vectore which have cost as mincost and have the outer loop paralell.
+      for (auto refGroup : loopNest.loadStoreInfo.permRefGroups) {
+        if (refGroup.second == minCost &&
+            (loopNest.loadStoreInfo.paralellLoops[refGroup.first.first[0]] ==
+             true)) {
+          std::cout << "checking permutatio: ";
+          for (auto x : refGroup.first.first)
+            std::cout << x << " ";
+          std::cout << "\n";
+          // Adding only the permutations into the vectore which have cost as
+          // mincost and have the outer loop paralell.
           minCostPerms.push_back(refGroup);
         }
       }
-			std::cout<<"mincostpermize: "<<minCostPerms.size()<<"\n";
+      std::cout << "mincostpermize: " << minCostPerms.size() << "\n";
       if (minCostPerms.size() > 1) {
-				std::vector<double> tieCost;
-				double minCost = std::numeric_limits<double>::max();
-				std::vector<int64_t> minCostPerm;
-				// Find the score for each permutation.
-				for(auto perm : minCostPerms){
-					double cost = 0;
-					for(auto refGroup: perm.first.second){
-						cost += (refGroup.first.size()*(1.0f - (refGroup.second / perm.second )));
-					}
-					// store the tie breaking cost into the vector.
-					tieCost.push_back(cost);
-					if(cost < minCost){
-						minCostPerm = perm.first.first;	
-					}
-				}				
-				// check if all the costs are same.
-				bool areAllSame = false;
-				if ( std::adjacent_find( tieCost.begin(), tieCost.end(), std::not_equal_to<>() ) == tieCost.end()){
-					areAllSame = true;
-				}
-				// if all costs are same choose any refGroup, It does not matter.
-				if(areAllSame == true){
-					// Choose the first permutation and permute.
-					std::vector<unsigned int> permMap(minCostPerms[0].first.first.size());
-					for (unsigned inx = 0; inx < minCostPerms[0].first.first.size(); ++inx) {
-						permMap[minCostPerms[0].first.first[inx]] = inx;
-					}
-					permuteLoops(loopNest.loops, permMap);
-					std::cout<<"permutin 1\n";
-					isPermuted = true;
-					break;
-				}
-				else{
-					// take the minimum cost permutations and permute according to it.
-					std::vector<unsigned int> permMap(minCostPerm.size());
-					for (unsigned inx = 0; inx < minCostPerm.size(); ++inx) {
-						permMap[minCostPerm[inx]] = inx;
-					}
-					permuteLoops(loopNest.loops, permMap);
-					std::cout<<"permutin 2\n";
-					isPermuted = true;
-					break;
-				}
-			}
-			else if(minCostPerms.size() == 1){
-					// take the minimum cost permutations and permute according to it.
-					std::vector<int64_t> minCostPerm = minCostPerms[0].first.first;
-					std::vector<unsigned int> permMap(minCostPerm.size());
-					for (unsigned inx = 0; inx < minCostPerm.size(); ++inx) {
-						permMap[minCostPerm[inx]] = inx;
-					}
-					permuteLoops(loopNest.loops, permMap);
-					std::cout<<"permutin 3\n";
-					isPermuted = true;
-					break;
-
-
-	
-		}
-
-
-//-----------------------------------------------------------------------------------------------------------------------------------------//
-      // Check if the loop at loopInx is parallel in the chosen perm.
-/*
-      if (loopNest.loadStoreInfo.paralellLoops[perm.first[0]]) {
-				std::vector<unsigned int> permMap(perm.first.size());
-        // TODO: Verify if this approach is corrrect.
-        // choose this permutation as the answer permute the loops and break.
-        // First construct the permuteMap.
-        for (unsigned inx = 0; inx < perm.first.size(); ++inx) {
-          permMap[perm.first[inx]] = inx;
+        std::vector<double> tieCost;
+        double minCost = std::numeric_limits<double>::max();
+        std::vector<int64_t> minCostPerm;
+        // Find the score for each permutation.
+        for (auto perm : minCostPerms) {
+          double cost = 0;
+          for (auto refGroup : perm.first.second) {
+            cost += (refGroup.first.size() *
+                     (1.0f - (refGroup.second / perm.second)));
+          }
+          // store the tie breaking cost into the vector.
+          tieCost.push_back(cost);
+          if (cost < minCost) {
+            minCostPerm = perm.first.first;
+          }
+        }
+        // check if all the costs are same.
+        bool areAllSame = false;
+        if (std::adjacent_find(tieCost.begin(), tieCost.end(),
+                               std::not_equal_to<>()) == tieCost.end()) {
+          areAllSame = true;
+        }
+        // if all costs are same choose any refGroup, It does not matter.
+        if (areAllSame == true) {
+          // Choose the first permutation and permute.
+          makePerm(&loopNest, minCostPerms[0].first.first);
+          /*
+          std::vector<unsigned int> permMap(minCostPerms[0].first.first.size());
+          for (unsigned inx = 0; inx < minCostPerms[0].first.first.size();
+               ++inx) {
+            permMap[minCostPerms[0].first.first[inx]] = inx;
+          }
+          permuteLoops(loopNest.loops, permMap);
+					*/
+          std::cout << "permutin 1\n";
+          isPermuted = true;
+          break;
+        } else {
+          // take the minimum cost permutations and permute according to it.
+          makePerm(&loopNest, minCostPerm);
+					/*
+          std::vector<unsigned int> permMap(minCostPerm.size());
+          for (unsigned inx = 0; inx < minCostPerm.size(); ++inx) {
+            permMap[minCostPerm[inx]] = inx;
+          }
+          permuteLoops(loopNest.loops, permMap);
+					*/
+          std::cout << "permutin 2\n";
+          isPermuted = true;
+          break;
+        }
+      } else if (minCostPerms.size() == 1) {
+        // take the minimum cost permutations and permute according to it.
+        makePerm(&loopNest, minCostPerms[0].first.first);
+				/*
+        std::vector<int64_t> minCostPerm = minCostPerms[0].first.first;
+        std::vector<unsigned int> permMap(minCostPerm.size());
+        for (unsigned inx = 0; inx < minCostPerm.size(); ++inx) {
+          permMap[minCostPerm[inx]] = inx;
         }
         permuteLoops(loopNest.loops, permMap);
-				std::cout<<"permutin 1\n";
+				*/
+        std::cout << "permutin 3\n";
         isPermuted = true;
         break;
-      }*/
+      }
+
+      //-----------------------------------------------------------------------------------------------------------------------------------------//
+      // Check if the loop at loopInx is parallel in the chosen perm.
+      /*
+            if (loopNest.loadStoreInfo.paralellLoops[perm.first[0]]) {
+                                      std::vector<unsigned int>
+         permMap(perm.first.size());
+              // TODO: Verify if this approach is corrrect.
+              // choose this permutation as the answer permute the loops and
+         break.
+              // First construct the permuteMap.
+              for (unsigned inx = 0; inx < perm.first.size(); ++inx) {
+                permMap[perm.first[inx]] = inx;
+              }
+              permuteLoops(loopNest.loops, permMap);
+                                      std::cout<<"permutin 1\n";
+              isPermuted = true;
+              break;
+            }*/
     }
     // No loop with outer paralellism or group benifit  was found simply change
     // to the best loop order in terms of cache misses.
@@ -1474,15 +1411,18 @@ void AffineLoopTransform::runOnFunction() {
         loopNest.loadStoreInfo.permScores[0].first.size());
     if (!isPermuted) {
       // Choose the first permutation as the interchange permutation.
+      makePerm(&loopNest, loopNest.loadStoreInfo.permScores[0].first);
+			/*
       for (unsigned inx = 0;
            inx < loopNest.loadStoreInfo.permScores[0].first.size(); ++inx) {
         permMap[loopNest.loadStoreInfo.permScores[0].first[inx]] = inx;
       }
       // Permute the loops
       permuteLoops(loopNest.loops, permMap);
-			std::cout<<"permutin 4\n";
+			*/
+      std::cout << "permutin 4\n";
     }
-//----------------------------------------------------------------------------------------------------------------------------------------//
+    //----------------------------------------------------------------------------------------------------------------------------------------//
   }
 }
 
@@ -1493,79 +1433,3 @@ void registerAffineLoopTransform() {
                                  "optimizing locality and paralellism.");
 }
 } // namespace mlir
-/*
-{
-
-    // bool isPremPermuted = false;
-    if (!isPermuted) {
-      // check for fallback case.
-      double minCost = loopNest.loadStoreInfo.permScores[0].second;
-      std::vector<std::pair<
-          std::pair<
-              std::vector<int64_t>,
-              std::vector<std::pair<SmallVector<Operation *, 4>, double>>>,
-          double>>
-          minCostPerms;
-      // Find the premutaions with min loop cost.
-      for (auto perm : loopNest.loadStoreInfo.permRefGroups) {
-        if (perm.second == minCost) {
-          minCostPerms.push_back(perm);
-        }
-      }
-      if (minCostPerms.size() > 1) {
-        // Check if the refgroups are same in minCostPerms.
-        std::vector<std::pair<SmallVector<Operation *, 4>, double>> refGroup =
-            minCostPerms[0].first.second;
-
-        bool areAllSame = true;
-        for (auto locRefGroup : minCostPerms) {
-          // Manually compare the vectors
-          for (unsigned i = 0; i < locRefGroup.first.second.size(); ++i) {
-            if (locRefGroup.first.second[i].first != refGroup[i].first)
-              areAllSame = false;
-          }
-        }
-
-        if (areAllSame) {
-          // All refGroups are same inside the chosen permutations.
-          // Find the refGroup with the largest size.
-          // {perm:{allRefGroups:{refgroup :refGroupCost}:loopCost}}
-          //
-          std::pair<SmallVector<Operation *, 4>, double> largestSizeRefGroup;
-          unsigned maxSize = 0;
-          for (auto locRefGroup : minCostPerms[0].first.second) {
-            if (locRefGroup.first.size() > maxSize) {
-              maxSize = locRefGroup.first.size();
-              largestSizeRefGroup = locRefGroup;
-            }
-          }
-          double minCost = std::numeric_limits<double>::max();
-          std::vector<int64_t> finPerm;
-          // Largest size refGroup is in hand find the perm which has min cost
-          // for it.
-          for (auto locRefGroup : minCostPerms) {
-            for (auto refGroup : locRefGroup.first.second) {
-              if (refGroup.first == largestSizeRefGroup.first) {
-                if (refGroup.second < minCost) {
-                  minCost = refGroup.second;
-                  finPerm = locRefGroup.first.first;
-                }
-              }
-            }
-          }
-          std::vector<unsigned int> permMap(finPerm.size());
-          for (unsigned inx = 0; inx < finPerm.size(); ++inx) {
-            permMap[finPerm[inx]] = inx;
-          }
-          // Permute the loops
-          permuteLoops(loopNest.loops, permMap);
-					std::cout<<"permutin 2\n";
-          isPermuted = true;
-        }
-      }
-    }
-		std::cout<<"is permuted: "<<isPermuted<<"\n";
-
-
-}
-*/
