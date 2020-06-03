@@ -686,12 +686,6 @@ static void checkForTemporalReuse(AffineLoopTransform::LoopInfo *loopNest,
         // iterations.
         if (abs(dep.dependence[permuteMap[dep.dependence.size() - 1]]) <= 2) {
           toGroup = true;
-          std::cout << "grouping because of temporal reuse and rar "
-                       "dependence is\n";
-          for (auto comp : dep.dependence) {
-            std::cout << comp << " ";
-          }
-          std::cout << "\n";
           break;
         }
       }
@@ -879,6 +873,7 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
     std::cout << "refgroup end:\n";
   }
 }
+
 static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
                                  std::vector<int64_t> permuteMap) {
   // Iterate through the representative of the refGroups and start calculating
@@ -949,6 +944,7 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
           }
         }
       }
+			// Compute trailing cache misses.	
       for (int l = j - 1; l >= 0; l--) {
         lb = loopNest->loops[permuteMap[l]].getConstantLowerBound();
         ub = loopNest->loops[permuteMap[l]].getConstantUpperBound();
@@ -1006,6 +1002,7 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
       // If the elements are not zero then we can stop here and conclude the
       // remaining cache misses are product of iterations of remaining loops.
       else {
+			//compute trailing cache misses.
         for (int l = j; l >= 0; l--) {
           lb = loopNest->loops[permuteMap[l]].getConstantLowerBound();
           ub = loopNest->loops[permuteMap[l]].getConstantUpperBound();
@@ -1065,14 +1062,13 @@ static void findParalellLoops(AffineLoopTransform::LoopInfo *loopNest) {
   }
 }
 
-static void makePerm(AffineLoopTransform::LoopInfo *loopNest, std::vector<int64_t> perm){
-		std::vector<unsigned int> permMap(perm.size());
-		for (unsigned inx = 0; inx < perm.size();
-				 ++inx) {
-			permMap[perm[inx]] = inx;
-		}
-		permuteLoops(loopNest->loops, permMap);
-
+static void makePerm(AffineLoopTransform::LoopInfo *loopNest,
+                     std::vector<int64_t> perm) {
+  std::vector<unsigned int> permMap(perm.size());
+  for (unsigned inx = 0; inx < perm.size(); ++inx) {
+    permMap[perm[inx]] = inx;
+  }
+  permuteLoops(loopNest->loops, permMap);
 }
 
 void AffineLoopTransform::runOnFunction() {
@@ -1345,27 +1341,12 @@ void AffineLoopTransform::runOnFunction() {
         if (areAllSame == true) {
           // Choose the first permutation and permute.
           makePerm(&loopNest, minCostPerms[0].first.first);
-          /*
-          std::vector<unsigned int> permMap(minCostPerms[0].first.first.size());
-          for (unsigned inx = 0; inx < minCostPerms[0].first.first.size();
-               ++inx) {
-            permMap[minCostPerms[0].first.first[inx]] = inx;
-          }
-          permuteLoops(loopNest.loops, permMap);
-					*/
           std::cout << "permutin 1\n";
           isPermuted = true;
           break;
         } else {
           // take the minimum cost permutations and permute according to it.
           makePerm(&loopNest, minCostPerm);
-					/*
-          std::vector<unsigned int> permMap(minCostPerm.size());
-          for (unsigned inx = 0; inx < minCostPerm.size(); ++inx) {
-            permMap[minCostPerm[inx]] = inx;
-          }
-          permuteLoops(loopNest.loops, permMap);
-					*/
           std::cout << "permutin 2\n";
           isPermuted = true;
           break;
@@ -1373,14 +1354,6 @@ void AffineLoopTransform::runOnFunction() {
       } else if (minCostPerms.size() == 1) {
         // take the minimum cost permutations and permute according to it.
         makePerm(&loopNest, minCostPerms[0].first.first);
-				/*
-        std::vector<int64_t> minCostPerm = minCostPerms[0].first.first;
-        std::vector<unsigned int> permMap(minCostPerm.size());
-        for (unsigned inx = 0; inx < minCostPerm.size(); ++inx) {
-          permMap[minCostPerm[inx]] = inx;
-        }
-        permuteLoops(loopNest.loops, permMap);
-				*/
         std::cout << "permutin 3\n";
         isPermuted = true;
         break;
@@ -1412,14 +1385,6 @@ void AffineLoopTransform::runOnFunction() {
     if (!isPermuted) {
       // Choose the first permutation as the interchange permutation.
       makePerm(&loopNest, loopNest.loadStoreInfo.permScores[0].first);
-			/*
-      for (unsigned inx = 0;
-           inx < loopNest.loadStoreInfo.permScores[0].first.size(); ++inx) {
-        permMap[loopNest.loadStoreInfo.permScores[0].first[inx]] = inx;
-      }
-      // Permute the loops
-      permuteLoops(loopNest.loops, permMap);
-			*/
       std::cout << "permutin 4\n";
     }
     //----------------------------------------------------------------------------------------------------------------------------------------//
