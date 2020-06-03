@@ -613,7 +613,7 @@ eliminateInvalidDependence(AffineLoopTransform::LoopInfo *loopInfo,
   SmallVector<SmallVector<int64_t, 4>, 4> dependenceMatrix =
       loopInfo->loadStoreInfo.dependenceMatrix;
   for (auto perm : allPermutaions) {
-    // Check is the selected permutaion is invalid by checking if any
+    // Check if the selected permutaion is invalid by checking if any
     // depenedence in dependenceMatrix becomes lexicographically less than zero.
     isValid = true;
     for (unsigned i = 0; i < dependenceMatrix.size(); i++) {
@@ -655,6 +655,49 @@ compareAccessMatrix(std::vector<SmallVector<int64_t, 8>> srcMatrix,
   }
   return isEqual;
 }
+template<typename	T>
+static void checkForTemporalReuse(AffineLoopTransform::LoopInfo *loopNest, mlir::Operation *srcOpInst, mlir::Operation *dstOpInst,T depVector,std::vector<int64_t> permuteMap, bool &toGroup){
+
+          for (auto &dep : depVector) {
+            // Solution exists for if true. We can then check if spatial or
+            // temporal is present.
+            if (((dep.srcOpInst == srcOpInst && dep.dstOpInst == dstOpInst) ||
+                 (dep.srcOpInst == dstOpInst && dep.dstOpInst == srcOpInst)) &&
+                (srcOpInst != dstOpInst)) {
+              // Check for temproal resue. if only varies in the last dimension
+              // of the dependence only then we can say that temporal reuse is
+              // present.
+              bool isZero = true;
+              for (unsigned i = 0; i < dep.dependence.size() - 1; ++i) {
+                if (dep.dependence[permuteMap[i]] != 0)
+                  isZero = false;
+              }
+              // if all the elements are 0 uptil the last element then temporal
+              // reuse is present.
+              if (isZero) {
+                // TODO: add check for the condition given in paper for temporal
+                // reuse.
+                // The condition essentially means that temporal reuse can even
+                // be exploited if there is agap of atmost '2' between
+                // iterations.
+                if (abs(dep.dependence[permuteMap[dep.dependence.size() -
+                                                  1]]) <= 2) {
+                  toGroup = true;
+                  std::cout << "grouping because of temporal reuse and rar "
+                               "dependence is\n";
+                  for (auto comp : dep.dependence) {
+                    std::cout << comp << " ";
+                  }
+                  std::cout << "\n";
+                  break;
+                }
+              }
+            }
+          }
+
+
+}
+
 
 static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
                             std::vector<int64_t> permuteMap) {
@@ -741,7 +784,9 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
           mlir::Operation *dstOpInst =
               loopNest->loadStoreInfo.loadsAndStores[toContinue];
           // First checking in RAR.
-          for (auto &dep : loopNest->loadStoreInfo.rarDependences) {
+          checkForTemporalReuse(loopNest, srcOpInst, dstOpInst, loopNest->loadStoreInfo.rarDependences, permuteMap, toGroup);
+         /* 
+          for (auto &dep : loopNest->loadStoreInfo.rarDependences){
             // Solution exists for if true. We can then check if spatial or
             // temporal is present.
             if (((dep.srcOpInst == srcOpInst && dep.dstOpInst == dstOpInst) ||
@@ -776,13 +821,15 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
                 }
               }
             }
-          }
+          }*/
           // If we have found that the group can be made then break. and dont
           // check for WRW, and then check if theere is no dependence but still
           // there is spatial re-use because of the last dimension just varying
           // a little(less than 'cls').
           if (!toGroup) {
+          checkForTemporalReuse(loopNest, srcOpInst, dstOpInst, loopNest->loadStoreInfo.wrwDependences, permuteMap, toGroup);
             // then checking in WRW.
+            /*
             for (auto dep : loopNest->loadStoreInfo.wrwDependences) {
               // Solution exists for if true. We can then check if spatial or
               // temporal is present.
@@ -814,7 +861,7 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
                   }
                 }
               }
-            }
+            }*/
             // Check here for the last condition where the access matrix are the
             // same, but there is no dependence but still we can pair the
             // elements because of spatial reuse being present. to check the
