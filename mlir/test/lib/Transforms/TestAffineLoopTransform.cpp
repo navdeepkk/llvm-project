@@ -1,6 +1,5 @@
 //===- AffineLoopTransform.cpp - Does affineloop transformations for paralellism
 // and locality ------------------===//
-#include "iostream"
 #include "limits"
 #include "math.h"
 #include "mlir/Analysis/AffineAnalysis.h"
@@ -15,6 +14,7 @@
 #include "unordered_map"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Debug.h"
+#include "iostream"
 
 #define DEBUG_TYPE "affine-loop-interchange"
 
@@ -31,33 +31,32 @@ struct AffineLoopTransform
     bool containsIfElse = false;
     // Encodes info of all loads and stores.
     typedef struct {
-			// Captures all loads/stores in the loop nest.
+      // Captures all loads/stores in the loop nest.
       SmallVector<Operation *, 4> loadsAndStores;
-			// Captues the access matrix.
+      // Captues the access matrix.
       std::vector<std::vector<SmallVector<int64_t, 8>>> B;
-			// Captures the trailing matrix.
+      // Captures the trailing matrix.
       std::vector<std::vector<SmallVector<int64_t, 8>>> b;
-			// Temporarily holds the refGroups when processing.
+      // Temporarily holds the refGroups when processing.
       std::vector<SmallVector<Operation *, 4>> refGroups;
-			// Captures the info wether a loop is paralell or not.
+      // Captures the info wether a loop is paralell or not.
       std::unordered_map<int64_t, bool> paralellLoops;
       // {perm:{allRefGroups:{refgroup :refGroupCost}:loopCost}}
-      // A consolidated structure that holds all the permuataions, with respective
-      // refGroups and their cost.
+      // A consolidated structure that holds all the permuataions, with
+      // respective refGroups and their cost.
       std::vector<std::pair<
           std::pair<
               std::vector<int64_t>,
               std::vector<std::pair<SmallVector<Operation *, 4>, double>>>,
           double>>
           permRefGroups;
-			
+
       typedef struct {
         SmallVector<DependenceComponent, 2> dependenceComponents;
         bool isStatic;
       } Dependence;
-		
+
       typedef struct {
-      public:
         mlir::Operation *srcOpInst;
         mlir::Operation *dstOpInst;
         SmallVector<int64_t, 4> dependence;
@@ -115,39 +114,13 @@ struct AffineLoopTransform
   void runOnFunction() override;
 };
 
-// Computes the iteration domain for 'opInst' and populates 'indexSet', which
-// encapsulates the constraints involving loops surrounding 'opInst' and
-// potentially involving any Function symbols. The dimensional identifiers in
-// 'indexSet' correspond to the loops surrounding 'op' from outermost to
-// innermost.
-// TODO(andydavis) Add support to handle IfInsts surrounding 'op'.
 static LogicalResult getInstIndexSet(Operation *op,
                                      FlatAffineConstraints *indexSet) {
-  // TODO(andydavis) Extend this to gather enclosing IfInsts and consider
-  // factoring it out into a utility function.
   SmallVector<AffineForOp, 4> loops;
   getLoopIVs(*op, &loops);
   return getIndexSet(loops, indexSet);
 }
 
-// ValuePositionMap manages the mapping from Values which represent dimension
-// and symbol identifiers from 'src' and 'dst' access functions to positions
-// in new space where some Values are kept separate (using addSrc/DstValue)
-// and some Values are merged (addSymbolValue).
-// Position lookups return the absolute position in the new space which
-// has the following format:
-//
-//   [src-dim-identifiers] [dst-dim-identifiers] [symbol-identifiers]
-//
-// Note: access function non-IV dimension identifiers (that have 'dimension'
-// positions in the access function position space) are assigned as symbols
-// in the output position space. Convenience access functions which lookup
-// an Value in multiple maps are provided (i.e. getSrcDimOrSymPos) to handle
-// the common case of resolving positions for all access function operands.
-//
-// TODO(andydavis) Generalize this: could take a template parameter for
-// the number of maps (3 in the current case), and lookups could take indices
-// of maps to check. So getSrcDimOrSymPos would be "getPos(value, {0, 2})".
 class ValuePositionMap1 {
 public:
   void addSrcValue(Value value) {
@@ -198,15 +171,7 @@ private:
   DenseMap<Value, unsigned> srcDimPosMap;
   DenseMap<Value, unsigned> symbolPosMap;
 };
-// Builds a map from Value to identifier position in a new merged identifier
-// list, which is the result of merging dim/symbol lists from src/dst
-// iteration domains, the format of which is as follows:
-//
-//   [src-dim-identifiers, dst-dim-identifiers, symbol-identifiers, const_term]
-//
-// This method populates 'valuePosMap' with mappings from operand Values in
-// 'srcAccessMap'/'dstAccessMap' (as well as those in 'srcDomain'/'dstDomain')
-// to the position of these values in the merged list.
+
 static void
 buildDimAndSymbolPositionMaps1(const FlatAffineConstraints &srcDomain,
                                const AffineValueMap &srcAccessMap,
@@ -337,7 +302,6 @@ addMemRefAccessConstraints1(const AffineValueMap &srcAccessMap,
     for (unsigned j = 0, e = srcNumLocalIds; j < e; j++)
       eq[newLocalIdOffset + j] = srcFlatExpr[srcNumIds + j];
     // Insert the equation into the loopNest.LoadstoreInfo.B
-    // loopInfo->loadStoreInfo.B.push_back(eq);
     // Set constant term.
     eq[eq.size() - 1] = srcFlatExpr[srcFlatExpr.size() - 1];
 
@@ -377,29 +341,8 @@ addMemRefAccessConstraints1(const AffineValueMap &srcAccessMap,
   // equalities.
   assert(srcLocalVarCst.getNumEqualities() == 0);
 
-  // Add inequalities from srcLocalVarCst and destLocalVarCst into the
-  // dependence domain.
-  /*
-  SmallVector<int64_t, 8> ineq(dependenceDomain->getNumCols());
-  for (unsigned r = 0, e = srcLocalVarCst.getNumInequalities(); r < e; r++) {
-    std::fill(ineq.begin(), ineq.end(), 0);
-
-    // Set identifier coefficients from src local var constraints.
-    for (unsigned j = 0, e = srcOperands.size(); j < e; ++j)
-      ineq[valuePosMap.getSrcDimOrSymPos(srcOperands[j])] =
-          srcLocalVarCst.atIneq(r, j);
-    // Local terms.
-    for (unsigned j = 0, e = srcNumLocalIds; j < e; j++)
-      ineq[newLocalIdOffset + j] = srcLocalVarCst.atIneq(r, srcNumIds + j);
-    // Set constant term.
-    ineq[ineq.size() - 1] =
-        srcLocalVarCst.atIneq(r, srcLocalVarCst.getNumCols() - 1);
-    dependenceDomain->addInequality(ineq);
-  }
-*/
   return success();
 }
-} // end anonymous namespace
 
 static void
 getLoopNests(FuncOp f, std::vector<AffineLoopTransform::LoopInfo> *loopNests) {
@@ -531,7 +474,7 @@ condenseDependences(SmallVector<DependenceComponent, 2> dependenceComponents,
       else if (lb < 0 && ub == 0)
         depVector->push_back(-1);
       else
-        // TODO: check this if test case 2 fails.
+        // Being conservative here, encode '*' as '-1'.
         depVector->push_back(-1);
     }
   }
@@ -684,8 +627,6 @@ static void checkForTemporalReuse(AffineLoopTransform::LoopInfo *loopNest,
       // if all the elements are 0 uptil the last element then temporal
       // reuse is present.
       if (isZero) {
-        // TODO: add check for the condition given in paper for temporal
-        // reuse.
         // The condition essentially means that temporal reuse can even
         // be exploited if there is agap of atmost '2' between
         // iterations.
@@ -791,10 +732,10 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
           // there is spatial re-use because of the last dimension just varying
           // a little(less than 'cls').
           if (!toGroup) {
+            // then checking in WRW.
             checkForTemporalReuse(loopNest, srcOpInst, dstOpInst,
                                   loopNest->loadStoreInfo.wrwDependences,
                                   permuteMap, toGroup);
-            // then checking in WRW.
             // Check here for the last condition where the access matrix are the
             // same, but there is no dependence but still we can pair the
             // elements because of spatial reuse being present. to check the
@@ -824,8 +765,6 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
                   if (abs(b1[0][b1[0].size() - 1] - b2[0][b2[0].size() - 1]) <
                       cls /*CLS*/) {
                     toGroup = true;
-                    // std::cout << "grouping because of spatial reuse and "
-                    //             "dependence is\n";
                   }
                 }
               }
@@ -864,21 +803,6 @@ static void createRefGroups(AffineLoopTransform::LoopInfo *loopNest,
       }
     }
   }
-	/*
-  std::cout << "permutation: \n";
-  for (auto x : permuteMap)
-    std::cout << x << " ";
-  std::cout << std::endl;
-  std::cout << "size after group creation: "
-            << loopNest->loadStoreInfo.refGroups.size() << std::endl;
-  for (auto refGroup : loopNest->loadStoreInfo.refGroups) {
-    std::cout << "refgroup start:\n";
-    for (auto ls : refGroup) {
-      ls->getLoc().dump();
-    }
-    std::cout << "refgroup end:\n";
-  }
-	*/
 }
 
 static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
@@ -951,7 +875,7 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
           }
         }
       }
-			// Compute trailing cache misses.	
+      // Compute trailing cache misses.
       for (int l = j - 1; l >= 0; l--) {
         lb = loopNest->loops[permuteMap[l]].getConstantLowerBound();
         ub = loopNest->loops[permuteMap[l]].getConstantUpperBound();
@@ -961,12 +885,6 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
       }
       // Store this cost for future use.
       costVec.push_back(std::make_pair(refGroup, cost));
-			/*
-      std::cout << "permutaion: ";
-      for (auto elem : permuteMap)
-        std::cout << elem << " ";
-      std::cout << "PermCost: " << cost << "\n";
-			*/
       totalCost += cost;
       continue;
     }
@@ -1010,7 +928,7 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
       // If the elements are not zero then we can stop here and conclude the
       // remaining cache misses are product of iterations of remaining loops.
       else {
-			//compute trailing cache misses.
+        // compute trailing cache misses.
         for (int l = j; l >= 0; l--) {
           lb = loopNest->loops[permuteMap[l]].getConstantLowerBound();
           ub = loopNest->loops[permuteMap[l]].getConstantUpperBound();
@@ -1021,16 +939,6 @@ static double computeCacheMisses(AffineLoopTransform::LoopInfo *loopNest,
         break;
       }
     }
-	/*
-    std::cout << "permutaion: ";
-    for (auto elem : permuteMap)
-      std::cout << elem << " ";
-    std::cout << "PermCost: " << cost << "\n";
-
-    std::cout << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                 "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                 "xxxxxxxxxxxx\n";
-	*/
     // Store this cost for future use.
     costVec.push_back(std::make_pair(refGroup, cost));
     totalCost += cost;
@@ -1080,6 +988,7 @@ static void makePerm(AffineLoopTransform::LoopInfo *loopNest,
   }
   permuteLoops(loopNest->loops, permMap);
 }
+} // end anonymous namespace
 
 void AffineLoopTransform::runOnFunction() {
   // Find all perfeclty nested loops. If the loops are not perfeclty nested
@@ -1101,7 +1010,7 @@ void AffineLoopTransform::runOnFunction() {
     }
   }
 
-  // Processing the loads and stores to get FlatAffineConsttraints.
+  // Processing the loads and stores to make access functions.
   for (auto &loopNest : perfectLoopNests) {
     for (auto loadOrStore : loopNest.loadStoreInfo.loadsAndStores) {
       FlatAffineConstraints dependenceConstraints;
@@ -1126,9 +1035,6 @@ void AffineLoopTransform::runOnFunction() {
       initDependenceConstraints1(srcDomain, srcAccessMap, valuePosMap,
                                  &dependenceConstraints);
 
-      //  assert(valuePosMap.getNumDims() ==
-      //       srcDomain.getNumDimIds() + dstDomain.getNumDimIds());
-
       // Create memref access constraint by equating src/dst access functions.
       // Note that this check is conservative, and will fail in the future when
       // local variables for mod/div exprs are supported.
@@ -1137,31 +1043,7 @@ void AffineLoopTransform::runOnFunction() {
       }
     }
   }
-/*
-  // Try to print the access matrices.
-  for (auto loopNest : perfectLoopNests) {
-    for (auto B : loopNest.loadStoreInfo.B) {
-      llvm::outs() << "access matrix:\n";
-      for (unsigned i = 0; i < B.size(); ++i) {
-        for (unsigned j = 0; j < B[i].size(); ++j) {
-          llvm::outs() << B[i][j] << " ";
-        }
-        llvm::outs() << "\n";
-      }
-      llvm::outs() << "\n";
-    }
-    for (auto b : loopNest.loadStoreInfo.b) {
-      llvm::outs() << "trailing matrix:\n";
-      for (unsigned i = 0; i < b.size(); ++i) {
-        for (unsigned j = 0; j < b[i].size(); ++j) {
-          llvm::outs() << b[i][j] << " ";
-        }
-        llvm::outs() << "\n";
-      }
-      llvm::outs() << "\n";
-    }
-  }
-*/
+
   // Post-process matrix 'b' to contain only one vector.
   // Try to print the access matrices.
   for (auto &loopNest : perfectLoopNests) {
@@ -1182,16 +1064,6 @@ void AffineLoopTransform::runOnFunction() {
   for (auto &loopNest : perfectLoopNests) {
     // Calculate  dependences.
     checkDependences(&loopNest);
-		/*
-    std::cout << "Dependence matrix is:\n";
-    // Print the dependence matrix corresponding to the loop nest.
-    for (auto dependence : loopNest.loadStoreInfo.dependenceMatrix) {
-      for (unsigned i = 0; i < dependence.size(); ++i) {
-        std::cout << dependence[i] << " ";
-      }
-      std::cout << "\n";
-    }
-		*/
   }
 
   // Now we have the dependence matrix, we can rule out the invalid interchanges
@@ -1208,11 +1080,9 @@ void AffineLoopTransform::runOnFunction() {
 
     // Eliminate all the invalid dependences.
     eliminateInvalidDependence(&loopNest, allPermutations);
-    //std::cout << "no. of valid permutations: "
-    //          << loopNest.loadStoreInfo.validPermuataions.size() << std::endl;
   }
 
-	// Prune the unwanted RARdependences.
+  // Prune the unwanted RARdependences.
   for (auto &loopNest : perfectLoopNests) {
     SmallVector<int, 4> toRemove;
     for (unsigned i = 0; i < loopNest.loadStoreInfo.rarDependences.size();
@@ -1225,6 +1095,7 @@ void AffineLoopTransform::runOnFunction() {
             loopNest.loadStoreInfo.rarDependences[i].srcOpInst)
           break;
       }
+      // Find second access matrix.
       for (dstInx = 0; dstInx < loopNest.loadStoreInfo.loadsAndStores.size();
            dstInx++) {
         if (loopNest.loadStoreInfo.loadsAndStores[dstInx] ==
@@ -1249,44 +1120,21 @@ void AffineLoopTransform::runOnFunction() {
   for (auto &loopNest : perfectLoopNests) {
     for (auto perm : loopNest.loadStoreInfo.validPermuataions) {
       createRefGroups(&loopNest, perm);
+      // Calculate cache misses for the permutation.
       auto totalCost = computeCacheMisses(&loopNest, perm);
-      //std::cout << "Total cost:" << totalCost;
       // Store scores in SmallVector and then sort them in the order of
       // inceasing cache misses.
       loopNest.loadStoreInfo.permScores.push_back(
           std::make_pair(perm, totalCost));
       std::sort(loopNest.loadStoreInfo.permScores.begin(),
                 loopNest.loadStoreInfo.permScores.end(), sortByVal);
-      //std::cout << "\n\n\n\n";
     }
   }
-	
-	/*
-  // Just print the scores here. TODO: Remove this piece at last.
-  for (auto &loopNest : perfectLoopNests) {
-    for (auto elem : loopNest.loadStoreInfo.permScores) {
-      std::cout << "perm: ";
-      for (auto comp : elem.first) {
-        std::cout << comp << " ";
-      }
-      std::cout << "second: " << elem.second << " ";
-    }
-    std::cout << "\n";
-  }
-	*/
 
   // Find all paralell loops in the loopNests.
   for (auto &loopNest : perfectLoopNests) {
     findParalellLoops(&loopNest);
   }
-	/*
-  // print all paralell loops in the loopNests.
-  for (auto &loopNest : perfectLoopNests) {
-    for (auto loop : loopNest.loadStoreInfo.paralellLoops) {
-      std::cout << loop.first << " " << loop.second << "\n";
-    }
-  }
-	*/
 
   // After parallel loops are found we can just find the best permutation.
   // Check here if more than one permutaitons with min cost is present. if yes,
@@ -1294,18 +1142,6 @@ void AffineLoopTransform::runOnFunction() {
   // all the permutations have outer loop parallel. If yes, then choose the
   // permutaion among these which benifits the largest group, i.e. choose the
   // permutation which has the minimum cost for the largest group.
-
-	/*
-  for (auto &loopNest : perfectLoopNests) {
-    for (auto perm : loopNest.loadStoreInfo.permRefGroups) {
-      std::cout << "found permutatio: ";
-      for (auto x : perm.first.first)
-        std::cout << x << " ";
-      std::cout << "----" << perm.second;
-      std::cout << "\n";
-    }
-  }
-	*/
 
   for (auto &loopNest : perfectLoopNests) {
     bool isPermuted = false;
@@ -1324,18 +1160,11 @@ void AffineLoopTransform::runOnFunction() {
         if (refGroup.second == minCost &&
             (loopNest.loadStoreInfo.paralellLoops[refGroup.first.first[0]] ==
              true)) {
-					/*
-          std::cout << "checking permutatio: ";
-          for (auto x : refGroup.first.first)
-            std::cout << x << " ";
-          std::cout << "\n";
-					*/
           // Adding only the permutations into the vectore which have cost as
           // mincost and have the outer loop paralell.
           minCostPerms.push_back(refGroup);
         }
       }
-      // std::cout << "mincostpermize: " << minCostPerms.size() << "\n";
       if (minCostPerms.size() > 1) {
         std::vector<double> tieCost;
         double minCost = std::numeric_limits<double>::max();
@@ -1344,7 +1173,7 @@ void AffineLoopTransform::runOnFunction() {
         for (auto perm : minCostPerms) {
           double cost = 0;
           for (auto refGroup : perm.first.second) {
-						// refgroupsize * (1 - (refgroupcost / totalcost))
+            // refgroupsize * (1 - (refgroupcost / totalcost))
             cost += (refGroup.first.size() *
                      (1.0f - (refGroup.second / perm.second)));
           }
@@ -1364,49 +1193,28 @@ void AffineLoopTransform::runOnFunction() {
         if (areAllSame == true) {
           // Choose the first permutation and permute.
           makePerm(&loopNest, minCostPerms[0].first.first);
-          // std::cout << "permutin 1\n";
           isPermuted = true;
           break;
         } else {
           // take the minimum cost permutations and permute according to it.
           makePerm(&loopNest, minCostPerm);
-          // std::cout << "permutin 2\n";
           isPermuted = true;
           break;
         }
       } else if (minCostPerms.size() == 1) {
         // take the minimum cost permutations and permute according to it.
         makePerm(&loopNest, minCostPerms[0].first.first);
-        // std::cout << "permutin 3\n";
         isPermuted = true;
         break;
       }
 
       //-----------------------------------------------------------------------------------------------------------------------------------------//
-      // Check if the loop at loopInx is parallel in the chosen perm.
-      /*
-            if (loopNest.loadStoreInfo.paralellLoops[perm.first[0]]) {
-                                      std::vector<unsigned int>
-         permMap(perm.first.size());
-              // TODO: Verify if this approach is corrrect.
-              // choose this permutation as the answer permute the loops and
-         break.
-              // First construct the permuteMap.
-              for (unsigned inx = 0; inx < perm.first.size(); ++inx) {
-                permMap[perm.first[inx]] = inx;
-              }
-              permuteLoops(loopNest.loops, permMap);
-                                      std::cout<<"permutin 1\n";
-              isPermuted = true;
-              break;
-            }*/
     }
     // No loop with outer paralellism or group benifit  was found simply change
     // to the best loop order in terms of cache misses.
     if (!isPermuted) {
       // Choose the first permutation as the interchange permutation.
       makePerm(&loopNest, loopNest.loadStoreInfo.permScores[0].first);
-      // std::cout << "permutin 4\n";
     }
     //----------------------------------------------------------------------------------------------------------------------------------------//
   }
