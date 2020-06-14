@@ -1,4 +1,4 @@
-//===- AffineLoopTransform.cpp - Does affineloop transformations for paralellism
+//===- AffineLoopTransform.cpp - Does affineloop interchanges for paralellism
 // and locality ------------------===//
 #include "limits"
 #include "math.h"
@@ -14,7 +14,6 @@
 #include "unordered_map"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Debug.h"
-#include "iostream"
 
 #define DEBUG_TYPE "affine-loop-interchange"
 
@@ -1149,6 +1148,11 @@ void AffineLoopTransform::runOnFunction() {
       //------------------------------------------------------------------------------------------------------------------------------------------//
       // check for fallback case.
       double minCost = perm.second;
+      // If cost cost of this permutation is not equal to the cost of permuation
+      // with minmum cost then skip.
+      if (minCost != loopNest.loadStoreInfo.permScores[0].second)
+        continue;
+
       std::vector<std::pair<
           std::pair<
               std::vector<int64_t>,
@@ -1224,6 +1228,6 @@ namespace mlir {
 void registerAffineLoopTransform() {
   PassRegistration<AffineLoopTransform> pass(
       "affine-loop-interchange", "Perform affine loop transformations, "
-                                 "optimizing locality and paralellism.");
+                                 "optimizing for locality and paralellism.");
 }
 } // namespace mlir
