@@ -12,11 +12,11 @@
 #include "CodeComplete.h"
 #include "CodeCompletionStrings.h"
 #include "ExpectedTypes.h"
-#include "Logger.h"
 #include "SourceCode.h"
 #include "SymbolLocation.h"
 #include "URI.h"
 #include "index/SymbolID.h"
+#include "support/Logger.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclCXX.h"
@@ -283,6 +283,18 @@ bool SymbolCollector::handleDeclOccurrence(
   if (!ID)
     return true;
 
+  // ND is the canonical (i.e. first) declaration. If it's in the main file
+  // (which is not a header), then no public declaration was visible, so assume
+  // it's main-file only.
+  bool IsMainFileOnly =
+      SM.isWrittenInMainFile(SM.getExpansionLoc(ND->getBeginLoc())) &&
+      !isHeaderFile(SM.getFileEntryForID(SM.getMainFileID())->getName(),
+                    ASTCtx->getLangOpts());
+  // In C, printf is a redecl of an implicit builtin! So check OrigD instead.
+  if (ASTNode.OrigD->isImplicit() ||
+      !shouldCollectSymbol(*ND, *ASTCtx, Opts, IsMainFileOnly))
+    return true;
+
   // Note: we need to process relations for all decl occurrences, including
   // refs, because the indexing code only populates relations for specific
   // occurrences. For example, RelationBaseOf is only populated for the
@@ -297,23 +309,13 @@ bool SymbolCollector::handleDeclOccurrence(
   if (IsOnlyRef && !CollectRef)
     return true;
 
-  // ND is the canonical (i.e. first) declaration. If it's in the main file
-  // (which is not a header), then no public declaration was visible, so assume
-  // it's main-file only.
-  bool IsMainFileOnly =
-      SM.isWrittenInMainFile(SM.getExpansionLoc(ND->getBeginLoc())) &&
-      !isHeaderFile(SM.getFileEntryForID(SM.getMainFileID())->getName(),
-                    ASTCtx->getLangOpts());
-  // In C, printf is a redecl of an implicit builtin! So check OrigD instead.
-  if (ASTNode.OrigD->isImplicit() ||
-      !shouldCollectSymbol(*ND, *ASTCtx, Opts, IsMainFileOnly))
-    return true;
   // Do not store references to main-file symbols.
   // Unlike other fields, e.g. Symbols (which use spelling locations), we use
   // file locations for references (as it aligns the behavior of clangd's
   // AST-based xref).
   // FIXME: we should try to use the file locations for other fields.
-  if (CollectRef && !IsMainFileOnly && !isa<NamespaceDecl>(ND) &&
+  if (CollectRef && (!IsMainFileOnly || ND->isExternallyVisible()) &&
+      !isa<NamespaceDecl>(ND) &&
       (Opts.RefsInHeaders ||
        SM.getFileID(SM.getFileLoc(Loc)) == SM.getMainFileID()))
     DeclRefs[ND].emplace_back(SM.getFileLoc(Loc), Roles);
@@ -372,16 +374,12 @@ bool SymbolCollector::handleMacroOccurrence(const IdentifierInfo *Name,
                                             index::SymbolRoleSet Roles,
                                             SourceLocation Loc) {
   assert(PP.get());
-
-  const auto &SM = PP->getSourceManager();
-  auto DefLoc = MI->getDefinitionLoc();
-  auto SpellingLoc = SM.getSpellingLoc(Loc);
-  bool IsMainFileSymbol = SM.isInMainFile(SM.getExpansionLoc(DefLoc));
-
   // Builtin macros don't have useful locations and aren't needed in completion.
   if (MI->isBuiltinMacro())
     return true;
 
+  const auto &SM = PP->getSourceManager();
+  auto DefLoc = MI->getDefinitionLoc();
   // Also avoid storing predefined macros like __DBL_MIN__.
   if (SM.isWrittenInBuiltinFile(DefLoc))
     return true;
@@ -390,8 +388,13 @@ bool SymbolCollector::handleMacroOccurrence(const IdentifierInfo *Name,
   if (!ID)
     return true;
 
+  auto SpellingLoc = SM.getSpellingLoc(Loc);
+  bool IsMainFileOnly =
+      SM.isInMainFile(SM.getExpansionLoc(DefLoc)) &&
+      !isHeaderFile(SM.getFileEntryForID(SM.getMainFileID())->getName(),
+                    ASTCtx->getLangOpts());
   // Do not store references to main-file macros.
-  if ((static_cast<unsigned>(Opts.RefFilter) & Roles) && !IsMainFileSymbol &&
+  if ((static_cast<unsigned>(Opts.RefFilter) & Roles) && !IsMainFileOnly &&
       (Opts.RefsInHeaders || SM.getFileID(SpellingLoc) == SM.getMainFileID()))
     MacroRefs[*ID].push_back({Loc, Roles});
 
@@ -400,7 +403,7 @@ bool SymbolCollector::handleMacroOccurrence(const IdentifierInfo *Name,
     return true;
 
   // Skip main-file macros if we are not collecting them.
-  if (IsMainFileSymbol && !Opts.CollectMainFileSymbols)
+  if (IsMainFileOnly && !Opts.CollectMainFileSymbols)
     return false;
 
   // Mark the macro as referenced if this is a reference coming from the main
@@ -424,11 +427,12 @@ bool SymbolCollector::handleMacroOccurrence(const IdentifierInfo *Name,
   Symbol S;
   S.ID = std::move(*ID);
   S.Name = Name->getName();
-  if (!IsMainFileSymbol) {
+  if (!IsMainFileOnly) {
     S.Flags |= Symbol::IndexedForCodeCompletion;
     S.Flags |= Symbol::VisibleOutsideFile;
   }
   S.SymInfo = index::getSymbolInfoForMacro(*MI);
+  S.Origin = Opts.Origin;
   std::string FileURI;
   // FIXME: use the result to filter out symbols.
   shouldIndexFile(SM.getFileID(Loc));
@@ -742,7 +746,11 @@ bool SymbolCollector::isSelfContainedHeader(FileID FID) {
     const FileEntry *FE = SM.getFileEntryForID(FID);
     if (!FE)
       return false;
-    if (!PP->getHeaderSearchInfo().isFileMultipleIncludeGuarded(FE))
+    // FIXME: Should files that have been #import'd be considered
+    // self-contained? That's really a property of the includer,
+    // not of the file.
+    if (!PP->getHeaderSearchInfo().isFileMultipleIncludeGuarded(FE) &&
+        !PP->getHeaderSearchInfo().hasFileBeenImported(FE))
       return false;
     // This pattern indicates that a header can't be used without
     // particular preprocessor state, usually set up by another header.

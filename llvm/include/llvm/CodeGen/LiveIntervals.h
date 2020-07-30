@@ -22,7 +22,6 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/IndexedMap.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -40,6 +39,7 @@ namespace llvm {
 
 extern cl::opt<bool> UseSegmentSetForPhysRegs;
 
+class AAResults;
 class BitVector;
 class LiveIntervalCalc;
 class MachineBlockFrequencyInfo;
@@ -56,7 +56,7 @@ class VirtRegMap;
     MachineRegisterInfo* MRI;
     const TargetRegisterInfo* TRI;
     const TargetInstrInfo* TII;
-    AliasAnalysis *AA;
+    AAResults *AA;
     SlotIndexes* Indexes;
     MachineDominatorTree *DomTree = nullptr;
     LiveIntervalCalc *LICalc = nullptr;
@@ -212,7 +212,7 @@ class VirtRegMap;
       return Indexes;
     }
 
-    AliasAnalysis *getAliasAnalysis() const {
+    AAResults *getAliasAnalysis() const {
       return AA;
     }
 
@@ -256,8 +256,9 @@ class VirtRegMap;
       return Indexes->getMBBFromIndex(index);
     }
 
-    void insertMBBInMaps(MachineBasicBlock *MBB) {
-      Indexes->insertMBBInMaps(MBB);
+    void insertMBBInMaps(MachineBasicBlock *MBB,
+                         MachineInstr *InsertionPoint = nullptr) {
+      Indexes->insertMBBInMaps(MBB, InsertionPoint);
       assert(unsigned(MBB->getNumber()) == RegMaskBlocks.size() &&
              "Blocks must be added in order.");
       RegMaskBlocks.push_back(std::make_pair(RegMaskSlots.size(), 0));
@@ -310,16 +311,16 @@ class VirtRegMap;
     /// \param UpdateFlags Update live intervals for nonallocatable physregs.
     void handleMove(MachineInstr &MI, bool UpdateFlags = false);
 
-    /// Update intervals for operands of \p MI so that they begin/end on the
-    /// SlotIndex for \p BundleStart.
+    /// Update intervals of operands of all instructions in the newly
+    /// created bundle specified by \p BundleStart.
     ///
     /// \param UpdateFlags Update live intervals for nonallocatable physregs.
     ///
-    /// Requires MI and BundleStart to have SlotIndexes, and assumes
-    /// existing liveness is accurate. BundleStart should be the first
-    /// instruction in the Bundle.
-    void handleMoveIntoBundle(MachineInstr &MI, MachineInstr &BundleStart,
-                              bool UpdateFlags = false);
+    /// Assumes existing liveness is accurate.
+    /// \pre BundleStart should be the first instruction in the Bundle.
+    /// \pre BundleStart should not have a have SlotIndex as one will be assigned.
+    void handleMoveIntoNewBundle(MachineInstr &BundleStart,
+                                 bool UpdateFlags = false);
 
     /// Update live intervals for instructions in a range of iterators. It is
     /// intended for use after target hooks that may insert or remove

@@ -477,7 +477,7 @@ entry:
 ; CHECKASM-LABEL: .call_test_fpr_max:
 
 ; ASM32PWR4:       stwu 1, -128(1)
-; ASM32PWR4-NEXT:  lwz [[REG:[0-9]+]], LC2(2)
+; ASM32PWR4-NEXT:  lwz [[REG:[0-9]+]], L..C2(2)
 ; ASM32PWR4-NEXT:  lfd 1, 0([[REG]])
 ; ASM32PWR4-DAG:   stfd 1, 56(1)
 ; ASM32PWR4-DAG:   stfd 1, 64(1)
@@ -528,7 +528,7 @@ entry:
 ; 64BIT-NEXT: ADJCALLSTACKUP 152, 0, implicit-def dead $r1, implicit $r1
 
 ; ASM64PWR4:       stdu 1, -160(1)
-; ASM64PWR4-NEXT:  ld [[REG:[0-9]+]], LC2(2)
+; ASM64PWR4-NEXT:  ld [[REG:[0-9]+]], L..C2(2)
 ; ASM64PWR4-NEXT:  lfd 1, 0([[REG]])
 ; ASM64PWR4-DAG:   stfd 1, 112(1)
 ; ASM64PWR4-DAG:   stfd 1, 120(1)
@@ -704,8 +704,8 @@ declare void @test_vararg(i32, ...)
 ; 32BIT-NEXT: renamable $f1 = LFS 0, killed renamable $r[[REG]] :: (dereferenceable load 4 from @f1)
 ; 32BIT-NEXT: renamable $r[[REG:[0-9]+]] = LWZtoc @d1, $r2 :: (load 4 from got)
 ; 32BIT-NEXT: STFD renamable $f1, 0, %stack.[[SLOT1:[0-9]+]] :: (store 8 into %stack.[[SLOT1]])
-; 32BIT-NEXT: renamable $f2 = LFD 0, killed renamable $r[[REG]] :: (dereferenceable load 8 from @d1)
 ; 32BIT-NEXT: renamable $r4 = LWZ 0, %stack.[[SLOT1]] :: (load 4 from %stack.[[SLOT1]], align 8)
+; 32BIT-NEXT: renamable $f2 = LFD 0, killed renamable $r[[REG]] :: (dereferenceable load 8 from @d1)
 ; 32BIT-NEXT: renamable $r5 = LWZ 4, %stack.[[SLOT1]] :: (load 4 from %stack.[[SLOT1]] + 4)
 ; 32BIT-NEXT: STFD renamable $f2, 0, %stack.[[SLOT2:[0-9]+]] :: (store 8 into %stack.[[SLOT2]])
 ; 32BIT-NEXT: renamable $r6 = LWZ 0, %stack.[[SLOT2]] :: (load 4 from %stack.[[SLOT2]], align 8)
@@ -718,9 +718,9 @@ declare void @test_vararg(i32, ...)
 ; CHECKASM-LABEL: .call_test_vararg:
 
 ; ASM32PWR4:      stwu 1, -80(1)
-; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], LC1(2)
+; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], L..C1(2)
 ; ASM32PWR4-NEXT: lfs 1, 0([[REG]])
-; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], LC2(2)
+; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], L..C2(2)
 ; ASM32PWR4-NEXT: stfd 1, 64(1)
 ; ASM32PWR4-NEXT: lfd 2, 0([[REG]])
 ; ASM32PWR4-NEXT: li 3, 42
@@ -746,9 +746,9 @@ declare void @test_vararg(i32, ...)
 ; 64BIT-NEXT: ADJCALLSTACKUP 112, 0, implicit-def dead $r1, implicit $r1
 
 ; ASM64PWR4:      stdu 1, -128(1)
-; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], LC1(2)
+; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], L..C1(2)
 ; ASM64PWR4-NEXT: lfs 1, 0([[REG]])
-; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], LC2(2)
+; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], L..C2(2)
 ; ASM64PWR4-NEXT: stfd 1, 112(1)
 ; ASM64PWR4-NEXT: lfd 2, 0([[REG]])
 ; ASM64PWR4-NEXT: li 3, 42
@@ -773,8 +773,8 @@ entry:
 ; 32BIT-NEXT: renamable $f1 = LFS 0, killed renamable $r[[REG]] :: (dereferenceable load 4 from @f1)
 ; 32BIT-NEXT: renamable $r[[REG:[0-9]+]] = LWZtoc @d1, $r2 :: (load 4 from got)
 ; 32BIT-NEXT: STFD renamable $f1, 0, %stack.[[SLOT1:[0-9]+]] :: (store 8 into %stack.[[SLOT1]])
-; 32BIT-NEXT: renamable $f2 = LFD 0, killed renamable $r[[REG]] :: (dereferenceable load 8 from @d1)
 ; 32BIT-NEXT: renamable $r4 = LWZ 0, %stack.[[SLOT1]] :: (load 4 from %stack.[[SLOT1]], align 8)
+; 32BIT-NEXT: renamable $f2 = LFD 0, killed renamable $r[[REG]] :: (dereferenceable load 8 from @d1)
 ; 32BIT-NEXT: renamable $r5 = LWZ 4, %stack.[[SLOT1]] :: (load 4 from %stack.[[SLOT1]] + 4)
 ; 32BIT-NEXT: STFD renamable $f2, 0, %stack.[[SLOT2:[0-9]+]] :: (store 8 into %stack.[[SLOT2]])
 ; 32BIT-NEXT: renamable $r7 = LWZ 0, %stack.[[SLOT2]] :: (load 4 from %stack.[[SLOT2]], align 8)
@@ -786,10 +786,10 @@ entry:
 ; 32BIT-NEXT: ADJCALLSTACKUP 56, 0, implicit-def dead $r1, implicit $r1
 
 ; ASM32PWR4:      stwu 1, -80(1)
-; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], LC1(2)
+; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], L..C1(2)
 ; ASM32PWR4-NEXT: li 6, 42
 ; ASM32PWR4-NEXT: lfs 1, 0([[REG]])
-; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], LC2(2)
+; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], L..C2(2)
 ; ASM32PWR4-NEXT: stfd 1, 64(1)
 ; ASM32PWR4-NEXT: lfd 2, 0([[REG]])
 ; ASM32PWR4-NEXT: li 3, 42
@@ -816,10 +816,10 @@ entry:
 ; 64BIT-NEXT: ADJCALLSTACKUP 112, 0, implicit-def dead $r1, implicit $r1
 
 ; ASM64PWR4:      stdu 1, -128(1)
-; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], LC1(2)
+; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], L..C1(2)
 ; ASM64PWR4-NEXT: li 5, 42
 ; ASM64PWR4-NEXT: lfs 1, 0([[REG]])
-; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], LC2(2)
+; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], L..C2(2)
 ; ASM64PWR4-NEXT: stfd 1, 112(1)
 ; ASM64PWR4-NEXT: lfd 2, 0([[REG]])
 ; ASM64PWR4-NEXT: li 3, 42
@@ -844,8 +844,8 @@ entry:
 ; 32BIT-NEXT: renamable $f1 = LFS 0, killed renamable $r[[REG]] :: (dereferenceable load 4 from @f1)
 ; 32BIT-NEXT: renamable $r[[REG:[0-9]+]] = LWZtoc @d1, $r2 :: (load 4 from got)
 ; 32BIT-NEXT: STFD renamable $f1, 0, %stack.[[SLOT1:[0-9]+]] :: (store 8 into %stack.[[SLOT1]])
-; 32BIT-NEXT: renamable $f2 = LFD 0, killed renamable $r[[REG]] :: (dereferenceable load 8 from @d1)
 ; 32BIT-NEXT: renamable $r4 = LWZ 0, %stack.[[SLOT1]] :: (load 4 from %stack.[[SLOT1]], align 8)
+; 32BIT-NEXT: renamable $f2 = LFD 0, killed renamable $r[[REG]] :: (dereferenceable load 8 from @d1)
 ; 32BIT-NEXT: renamable $r5 = LWZ 4, %stack.[[SLOT1]] :: (load 4 from %stack.[[SLOT1]] + 4)
 ; 32BIT-NEXT: STFD renamable $f2, 0, %stack.[[SLOT2:[0-9]+]] :: (store 8 into %stack.[[SLOT2]])
 ; 32BIT-NEXT: renamable $r8 = LWZ 0, %stack.[[SLOT2]] :: (load 4 from %stack.[[SLOT2]], align 8)
@@ -858,11 +858,11 @@ entry:
 ; 32BIT-NEXT: ADJCALLSTACKUP 56, 0, implicit-def dead $r1, implicit $r1
 
 ; ASM32PWR4:      stwu 1, -80(1)
-; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], LC1(2)
+; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], L..C1(2)
 ; ASM32PWR4-DAG:  li 6, 0
 ; ASM32PWR4-DAG:  li 7, 42
 ; ASM32PWR4-NEXT: lfs 1, 0([[REG]])
-; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], LC2(2)
+; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], L..C2(2)
 ; ASM32PWR4-NEXT: stfd 1, 64(1)
 ; ASM32PWR4-NEXT: lfd 2, 0([[REG]])
 ; ASM32PWR4-NEXT: li 3, 42
@@ -889,10 +889,10 @@ entry:
 ; 64BIT-NEXT: ADJCALLSTACKUP 112, 0, implicit-def dead $r1, implicit $r1
 
 ; ASM64PWR4:      stdu 1, -128(1)
-; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], LC1(2)
+; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], L..C1(2)
 ; ASM64PWR4-NEXT: li 5, 42
 ; ASM64PWR4-NEXT: lfs 1, 0([[REG]])
-; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], LC2(2)
+; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], L..C2(2)
 ; ASM64PWR4-NEXT: stfd 1, 112(1)
 ; ASM64PWR4-NEXT: lfd 2, 0([[REG]])
 ; ASM64PWR4-NEXT: li 3, 42
@@ -921,7 +921,7 @@ entry:
 ; 32BIT-NEXT: ADJCALLSTACKUP 56, 0, implicit-def dead $r1, implicit $r1
 
 ; ASM32PWR4:      stwu 1, -64(1)
-; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], LC1(2)
+; ASM32PWR4-NEXT: lwz [[REG:[0-9]+]], L..C1(2)
 ; ASM32PWR4-NEXT: lfs 1, 0([[REG]])
 ; ASM32PWR4-NEXT: li 3, 42
 ; ASM32PWR4-NEXT: stfs 1, 60(1)
@@ -939,7 +939,7 @@ entry:
 ; 64BIT-NEXT: ADJCALLSTACKUP 112, 0, implicit-def dead $r1, implicit $r1
 
 ; ASM64PWR4:      stdu 1, -128(1)
-; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], LC1(2)
+; ASM64PWR4-NEXT: ld [[REG:[0-9]+]], L..C1(2)
 ; ASM64PWR4-NEXT: lfs 1, 0([[REG]])
 ; ASM64PWR4-NEXT: li 3, 42
 ; ASM64PWR4-NEXT: stfs 1, 124(1)
@@ -992,7 +992,7 @@ declare void @test_stackarg_int(i32, i32, i32, i32, i32, i32, i32, i32, i8 zeroe
 ; 32BIT-DAG:  renamable $r[[REGLLIADDR:[0-9]+]] = LWZtoc @lli, $r2 :: (load 4 from got)
 ; 32BIT-DAG:  renamable $r[[REGLLI1:[0-9]+]] = LWZ 0, renamable $r[[REGLLIADDR]] :: (dereferenceable load 4 from @lli, align 8)
 ; 32BIT-DAG:  STW killed renamable $r[[REGLLI1]], 68, $r1 :: (store 4)
-; 32BIT-DAG:  renamable $r[[REGLLI2:[0-9]+]] = LWZ 4, killed renamable $r[[REGLLIADDR]] :: (dereferenceable load 4 from @lli + 4)
+; 32BIT-DAG:  renamable $r[[REGLLI2:[0-9]+]] = LWZ 4, killed renamable $r[[REGLLIADDR]] :: (dereferenceable load 4 from @lli + 4, align 8)
 ; 32BIT-DAG:  STW killed renamable $r[[REGLLI2]], 72, $r1 :: (store 4)
 ; 32BIT-DAG:  STW renamable $r[[REGI]], 76, $r1 :: (store 4)
 ; 32BIT-NEXT: BL_NOP <mcsymbol .test_stackarg_int>, csr_aix32, implicit-def dead $lr, implicit $rm, implicit $r3, implicit $r4, implicit $r5, implicit $r6, implicit $r7, implicit $r8, implicit $r9, implicit $r10, implicit $r2, implicit-def $r1
@@ -1010,16 +1010,16 @@ declare void @test_stackarg_int(i32, i32, i32, i32, i32, i32, i32, i32, i8 zeroe
 ; ASM32PWR4-DAG:   li 8, 6
 ; ASM32PWR4-DAG:   li 9, 7
 ; ASM32PWR4-DAG:   li 10, 8
-; ASM32PWR4-DAG:   lwz [[REGCADDR:[0-9]+]], LC6(2)
+; ASM32PWR4-DAG:   lwz [[REGCADDR:[0-9]+]], L..C6(2)
 ; ASM32PWR4-DAG:   lbz [[REGC:[0-9]+]], 0([[REGCADDR]])
 ; ASM32PWR4-DAG:   stw [[REGC]], 56(1)
-; ASM32PWR4-DAG:   lwz [[REGSIADDR:[0-9]+]], LC4(2)
+; ASM32PWR4-DAG:   lwz [[REGSIADDR:[0-9]+]], L..C4(2)
 ; ASM32PWR4-DAG:   lha [[REGSI:[0-9]+]], 0([[REGSIADDR]])
 ; ASM32PWR4-DAG:   stw [[REGSI]], 60(1)
-; ASM32PWR4-DAG:   lwz [[REGIADDR:[0-9]+]], LC5(2)
+; ASM32PWR4-DAG:   lwz [[REGIADDR:[0-9]+]], L..C5(2)
 ; ASM32PWR4-DAG:   lwz [[REGI:[0-9]+]], 0([[REGIADDR]])
 ; ASM32PWR4-DAG:   stw [[REGI]], 64(1)
-; ASM32PWR4-DAG:   lwz [[REGLLIADDR:[0-9]+]], LC7(2)
+; ASM32PWR4-DAG:   lwz [[REGLLIADDR:[0-9]+]], L..C7(2)
 ; ASM32PWR4-DAG:   lwz [[REGLLI1:[0-9]+]], 0([[REGLLIADDR]])
 ; ASM32PWR4-DAG:   stw [[REGLLI1]], 68(1)
 ; ASM32PWR4-DAG:   lwz [[REGLLI2:[0-9]+]], 4([[REGLLIADDR]])
@@ -1064,16 +1064,16 @@ declare void @test_stackarg_int(i32, i32, i32, i32, i32, i32, i32, i32, i8 zeroe
 ; ASM64PWR4-DAG:   li 8, 6
 ; ASM64PWR4-DAG:   li 9, 7
 ; ASM64PWR4-DAG:   li 10, 8
-; ASM64PWR4-DAG:   ld [[REGCADDR:[0-9]+]], LC5(2)
+; ASM64PWR4-DAG:   ld [[REGCADDR:[0-9]+]], L..C5(2)
 ; ASM64PWR4-DAG:   lbz [[REGC:[0-9]+]], 0([[REGCADDR]])
 ; ASM64PWR4-DAG:   std [[REGC]], 112(1)
-; ASM64PWR4-DAG:   ld [[REGSIADDR:[0-9]+]], LC3(2)
+; ASM64PWR4-DAG:   ld [[REGSIADDR:[0-9]+]], L..C3(2)
 ; ASM64PWR4-DAG:   lha [[REGSI:[0-9]+]], 0([[REGSIADDR]])
 ; ASM64PWR4-DAG:   std [[REGSI]], 120(1)
-; ASM64PWR4-DAG:   ld [[REGIADDR:[0-9]+]], LC4(2)
+; ASM64PWR4-DAG:   ld [[REGIADDR:[0-9]+]], L..C4(2)
 ; ASM64PWR4-DAG:   lwz [[REGI:[0-9]+]], 0([[REGIADDR]])
 ; ASM64PWR4-DAG:   std [[REGI]], 128(1)
-; ASM64PWR4-DAG:   ld [[REGLLIADDR:[0-9]+]], LC6(2)
+; ASM64PWR4-DAG:   ld [[REGLLIADDR:[0-9]+]], L..C6(2)
 ; ASM64PWR4-DAG:   ld [[REGLLI:[0-9]+]], 0([[REGLLIADDR]])
 ; ASM64PWR4-DAG:   std [[REGLLI]], 136(1)
 ; ASM64PWR4-DAG:   std [[REGI]], 144(1)
@@ -1125,9 +1125,9 @@ declare void @test_stackarg_float(i32, i32, i32, i32, i32, i32, i32, i32, float,
 ; ASM32PWR4-DAG:  li 8, 6
 ; ASM32PWR4-DAG:  li 9, 7
 ; ASM32PWR4-DAG:  li 10, 8
-; ASM32PWR4-DAG:  lwz [[REGF:[0-9]+]], LC8(2)
+; ASM32PWR4-DAG:  lwz [[REGF:[0-9]+]], L..C8(2)
 ; ASM32PWR4-DAG:  lfs 1, 0([[REGF]])
-; ASM32PWR4-DAG:  lwz [[REGD:[0-9]+]], LC9(2)
+; ASM32PWR4-DAG:  lwz [[REGD:[0-9]+]], L..C9(2)
 ; ASM32PWR4-DAG:  lfd 2, 0([[REGD:[0-9]+]])
 ; ASM32PWR4-DAG:  stfs 1, 56(1)
 ; ASM32PWR4-DAG:  stfd 2, 60(1)
@@ -1164,9 +1164,9 @@ declare void @test_stackarg_float(i32, i32, i32, i32, i32, i32, i32, i32, float,
 ; ASM64PWR4-DAG:  li 8, 6
 ; ASM64PWR4-DAG:  li 9, 7
 ; ASM64PWR4-DAG:  li 10, 8
-; ASM64PWR4-DAG:  ld [[REGF:[0-9]+]], LC7(2)
+; ASM64PWR4-DAG:  ld [[REGF:[0-9]+]], L..C7(2)
 ; ASM64PWR4-DAG:  lfs 1, 0([[REGF]])
-; ASM64PWR4-DAG:  ld [[REGD:[0-9]+]], LC8(2)
+; ASM64PWR4-DAG:  ld [[REGD:[0-9]+]], L..C8(2)
 ; ASM64PWR4-DAG:  lfd 2, 0([[REGD]])
 ; ASM64PWR4-DAG:  stfs 1, 112(1)
 ; ASM64PWR4-DAG:  stfd 2, 120(1)
@@ -1211,7 +1211,7 @@ declare void @test_stackarg_float2(i32, i32, i32, i32, i32, i32, ...)
 ; ASM32PWR4-DAG: li 6, 4
 ; ASM32PWR4-DAG: li 7, 5
 ; ASM32PWR4-DAG: li 8, 6
-; ASM32PWR4-DAG: lwz [[REG:[0-9]+]], LC9(2)
+; ASM32PWR4-DAG: lwz [[REG:[0-9]+]], L..C9(2)
 ; ASM32PWR4-DAG: lfd 1, 0([[REG]])
 ; ASM32PWR4-DAG: stfd 1, 56(1)
 ; ASM32PWR4-DAG: lwz 9, 56(1)
@@ -1243,7 +1243,7 @@ declare void @test_stackarg_float2(i32, i32, i32, i32, i32, i32, ...)
 ; ASM64PWR4-DAG: li 6, 4
 ; ASM64PWR4-DAG: li 7, 5
 ; ASM64PWR4-DAG: li 8, 6
-; ASM64PWR4-DAG: ld [[REG:[0-9]+]], LC8(2)
+; ASM64PWR4-DAG: ld [[REG:[0-9]+]], L..C8(2)
 ; ASM64PWR4-DAG: lfd 1, 0([[REG]])
 ; ASM64PWR4-DAG: stfd 1, 120(1)
 ; ASM64PWR4-DAG: ld 9, 120(1)
@@ -1296,9 +1296,9 @@ declare void @test_stackarg_float3(i32, i32, i32, i32, i32, i32, i32, ...)
 ; ASM32PWR4-DAG:   li 7, 5
 ; ASM32PWR4-DAG:   li 8, 6
 ; ASM32PWR4-DAG:   li 9, 7
-; ASM32PWR4-DAG:   lwz [[REGD:[0-9]+]], LC9(2)
+; ASM32PWR4-DAG:   lwz [[REGD:[0-9]+]], L..C9(2)
 ; ASM32PWR4-DAG:   lfd 1, 0([[REGD]])
-; ASM32PWR4-DAG:   lwz [[REGF:[0-9]+]], LC8(2)
+; ASM32PWR4-DAG:   lwz [[REGF:[0-9]+]], L..C8(2)
 ; ASM32PWR4-DAG:   lfs 2, 0([[REGF]])
 ; ASM32PWR4-DAG:   stfd 1, 52(1)
 ; ASM32PWR4-DAG:   stfs 2, 60(1)
@@ -1338,9 +1338,9 @@ declare void @test_stackarg_float3(i32, i32, i32, i32, i32, i32, i32, ...)
 ; ASM64PWR4-DAG:   li 7, 5
 ; ASM64PWR4-DAG:   li 8, 6
 ; ASM64PWR4-DAG:   li 9, 7
-; ASM64PWR4-DAG:   ld [[REGD:[0-9]+]], LC8(2)
+; ASM64PWR4-DAG:   ld [[REGD:[0-9]+]], L..C8(2)
 ; ASM64PWR4-DAG:   lfd 1, 0([[REGD]])
-; ASM64PWR4-DAG:   ld [[REGF:[0-9]+]], LC7(2)
+; ASM64PWR4-DAG:   ld [[REGF:[0-9]+]], L..C7(2)
 ; ASM64PWR4-DAG:   lfs 2, 0([[REGF]])
 ; ASM64PWR4-DAG:   stfs 2, 112(1)
 ; ASM64PWR4-DAG:   stfd 1, 120(1)
@@ -1484,7 +1484,7 @@ entry:
 ; 32BIT-DAG:   $r10 = LI 8
 ; 32BIT-DAG:   renamable $r[[REGLL1ADDR:[0-9]+]] = LWZtoc @ll1, $r2 :: (load 4 from got)
 ; 32BIT-DAG:   renamable $r[[REGLL1A:[0-9]+]] = LWZ 0, renamable $r[[REGLL1ADDR]] :: (dereferenceable load 4 from @ll1, align 8)
-; 32BIT-DAG:   renamable $r[[REGLL1B:[0-9]+]] = LWZ 4, killed renamable $r[[REGLL1ADDR]] :: (dereferenceable load 4 from @ll1 + 4)
+; 32BIT-DAG:   renamable $r[[REGLL1B:[0-9]+]] = LWZ 4, killed renamable $r[[REGLL1ADDR]] :: (dereferenceable load 4 from @ll1 + 4, align 8)
 ; 32BIT-DAG:   STW killed renamable $r[[REGLL1A]], 56, $r1 :: (store 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REGLL1B]], 60, $r1 :: (store 4)
 ; 32BIT-DAG:   renamable $r[[REGSIADDR:[0-9]+]] = LWZtoc @si1, $r2 :: (load 4 from got)
@@ -1501,7 +1501,7 @@ entry:
 ; 32BIT-DAG:   STW killed renamable $r[[REGSI]], 76, $r1 :: (store 4)
 ; 32BIT-DAG:   renamable $r[[REGLL2ADDR:[0-9]+]] = LWZtoc @ll2, $r2 :: (load 4 from got)
 ; 32BIT-DAG:   renamable $r[[REGLL2A:[0-9]+]] = LWZ 0, renamable $r[[REGLL2ADDR]] :: (dereferenceable load 4 from @ll2, align 8)
-; 32BIT-DAG:   renamable $r[[REGLL2B:[0-9]+]] = LWZ 4, killed renamable $r[[REGLL2ADDR]] :: (dereferenceable load 4 from @ll2 + 4)
+; 32BIT-DAG:   renamable $r[[REGLL2B:[0-9]+]] = LWZ 4, killed renamable $r[[REGLL2ADDR]] :: (dereferenceable load 4 from @ll2 + 4, align 8)
 ; 32BIT-DAG:   STW killed renamable $r[[REGLL2A]], 80, $r1 :: (store 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REGLL2B]], 84, $r1 :: (store 4)
 ; 32BIT-DAG:   renamable $r[[REGUCADDR:[0-9]+]] = LWZtoc @uc1, $r2 :: (load 4 from got)
@@ -1564,14 +1564,14 @@ entry:
 ; ASM32PWR4-DAG:    li 9, 7
 ; ASM32PWR4-DAG:    li 8, 6
 ; ASM32PWR4-DAG:    li 10, 8
-; ASM32PWR4-DAG:    lwz [[REG1:[0-9]+]], LC10(2)
-; ASM32PWR4-DAG:    lwz [[REG2:[0-9]+]], LC11(2)
-; ASM32PWR4-DAG:    lwz [[REG3:[0-9]+]], LC12(2)
-; ASM32PWR4-DAG:    lwz [[REG4:[0-9]+]], LC13(2)
-; ASM32PWR4-DAG:    lwz [[REG5:[0-9]+]], LC14(2)
-; ASM32PWR4-DAG:    lwz [[REG6:[0-9]+]], LC15(2)
-; ASM32PWR4-DAG:    lwz [[REG7:[0-9]+]], LC16(2)
-; ASM32PWR4-DAG:    lwz [[REG8:[0-9]+]], LC17(2)
+; ASM32PWR4-DAG:    lwz [[REG1:[0-9]+]], L..C10(2)
+; ASM32PWR4-DAG:    lwz [[REG2:[0-9]+]], L..C11(2)
+; ASM32PWR4-DAG:    lwz [[REG3:[0-9]+]], L..C12(2)
+; ASM32PWR4-DAG:    lwz [[REG4:[0-9]+]], L..C13(2)
+; ASM32PWR4-DAG:    lwz [[REG5:[0-9]+]], L..C14(2)
+; ASM32PWR4-DAG:    lwz [[REG6:[0-9]+]], L..C15(2)
+; ASM32PWR4-DAG:    lwz [[REG7:[0-9]+]], L..C16(2)
+; ASM32PWR4-DAG:    lwz [[REG8:[0-9]+]], L..C17(2)
 ; ASM32PWR4-DAG:    lha 5, 0([[REG1]])
 ; ASM32PWR4-DAG:    lwz 11, 0([[REG7]])
 ; ASM32PWR4-DAG:    lwz 7, 4([[REG7]])
@@ -1610,14 +1610,14 @@ entry:
 ; ASM64PWR4-DAG:    li 8, 6
 ; ASM64PWR4-DAG:    li 9, 7
 ; ASM64PWR4-DAG:    li 10, 8
-; ASM64PWR4-DAG:    ld [[REG1:[0-9]+]], LC9(2)
-; ASM64PWR4-DAG:    ld [[REG2:[0-9]+]], LC10(2)
-; ASM64PWR4-DAG:    ld [[REG3:[0-9]+]], LC11(2)
-; ASM64PWR4-DAG:    ld [[REG4:[0-9]+]], LC12(2)
-; ASM64PWR4-DAG:    ld [[REG5:[0-9]+]], LC13(2)
-; ASM64PWR4-DAG:    ld [[REG6:[0-9]+]], LC14(2)
-; ASM64PWR4-DAG:    ld [[REG7:[0-9]+]], LC15(2)
-; ASM64PWR4-DAG:    ld [[REG8:[0-9]+]], LC16(2)
+; ASM64PWR4-DAG:    ld [[REG1:[0-9]+]], L..C9(2)
+; ASM64PWR4-DAG:    ld [[REG2:[0-9]+]], L..C10(2)
+; ASM64PWR4-DAG:    ld [[REG3:[0-9]+]], L..C11(2)
+; ASM64PWR4-DAG:    ld [[REG4:[0-9]+]], L..C12(2)
+; ASM64PWR4-DAG:    ld [[REG5:[0-9]+]], L..C13(2)
+; ASM64PWR4-DAG:    ld [[REG6:[0-9]+]], L..C14(2)
+; ASM64PWR4-DAG:    ld [[REG7:[0-9]+]], L..C15(2)
+; ASM64PWR4-DAG:    ld [[REG8:[0-9]+]], L..C16(2)
 ; ASM64PWR4-DAG:    lha 7, 0([[REG1]])
 ; ASM64PWR4-DAG:    lbz 5, 0([[REG2]])
 ; ASM64PWR4-DAG:    ld 6, 0([[REG3]])
@@ -1672,12 +1672,12 @@ define void @test_i1_stack(i32 %a, i32 %c, i32 %d, i32 %e, i32 %f, i32 %g, i32 %
 ; CHECKASM-LABEL:  test_i1_stack:
 
 ; ASM32PWR4-DAG:   lbz [[REGB:[0-9]+]], 59(1)
-; ASM32PWR4-DAG:   lwz [[REGBTOC:[0-9]+]], LC18(2)
+; ASM32PWR4-DAG:   lwz [[REGBTOC:[0-9]+]], L..C18(2)
 ; ASM32PWR4-DAG:   stb [[SCRATCHREG:[0-9]+]], 0([[REGBTOC]])
 ; ASM32PWR4-DAG:   blr
 
 ; ASM64PWR4-DAG:   lbz [[REGB:[0-9]+]], 119(1)
-; ASM64PWR4-DAG:   ld [[REGBTOC:[0-9]+]], LC17(2)
+; ASM64PWR4-DAG:   ld [[REGBTOC:[0-9]+]], L..C17(2)
 ; ASM64PWR4-DAG:   stb [[SCRATCHREG:[0-9]+]], 0([[REGBTOC]])
 ; ASM64PWR4-DAG:   blr
 
@@ -1842,23 +1842,23 @@ entry:
 ; 32BIT-DAG:   renamable $r[[SCRATCHREG:[0-9]+]] = LWZtoc %const.10, $r2 :: (load 4 from got)
 ; 32BIT-DAG:   renamable $r[[SCRATCHREG:[0-9]+]] = LWZtoc %const.11, $r2 :: (load 4 from got)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 56, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 60, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 60, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 64, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 68, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 68, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 72, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 76, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 76, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 80, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[SCRATCHREG:[0-9]+]], 84, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[SCRATCHREG:[0-9]+]], 84, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 88, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 92, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 92, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 96, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 100, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 100, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 104, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 108, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 108, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 112, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 116, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 116, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 120, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 124, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 124, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[SCRATCHREG:[0-9]+]], 128, $r1 :: (store 4)
 ; 32BIT-DAG:   renamable $r[[REGF1:[0-9]+]] = LWZtoc @f14, $r2 :: (load 4 from got)
 ; 32BIT-DAG:   renamable $r3 = LWZ 0, killed renamable $r[[REGF1]] :: (load 4 from @f14)
@@ -1924,11 +1924,11 @@ entry:
 ; ASM32PWR4:       mflr 0
 ; ASM32PWR4-DAG:   stw 0, 8(1)
 ; ASM32PWR4-DAG:   stwu 1, -144(1)
-; ASM32PWR4-DAG:   lwz [[REGF1ADDR:[0-9]+]], LC20(2)
+; ASM32PWR4-DAG:   lwz [[REGF1ADDR:[0-9]+]], L..C20(2)
 ; ASM32PWR4-DAG:   lwz [[REGF1:[0-9]+]], 0([[REGF1ADDR]])
-; ASM32PWR4-DAG:   lwz [[REGDADDR:[0-9]+]], LC19(2)
+; ASM32PWR4-DAG:   lwz [[REGDADDR:[0-9]+]], L..C19(2)
 ; ASM32PWR4-DAG:   lfd [[REGD:[0-9]+]], 0([[REGDADDR]])
-; ASM32PWR4-DAG:   lwz [[REGF2ADDR:[0-9]+]], LC21(2)
+; ASM32PWR4-DAG:   lwz [[REGF2ADDR:[0-9]+]], L..C21(2)
 ; ASM32PWR4-DAG:   lwz [[REGF2:[0-9]+]], 0([[REGF2ADDR]])
 ; ASM32PWR4-DAG:   stw [[SCRATCHREG:[0-9]+]], 56(1)
 ; ASM32PWR4-DAG:   stw [[SCRATCHREG:[0-9]+]], 60(1)
@@ -1956,11 +1956,11 @@ entry:
 ; ASM64PWR4:       mflr 0
 ; ASM64PWR4-DAG:   std 0, 16(1)
 ; ASM64PWR4-DAG:   stdu 1, -176(1)
-; ASM64PWR4-DAG:   ld [[REGF1ADDR:[0-9]+]], LC18(2)
+; ASM64PWR4-DAG:   ld [[REGF1ADDR:[0-9]+]], L..C18(2)
 ; ASM64PWR4-DAG:   lwz [[REGF1:[0-9]+]], 0([[REGF1ADDR]])
-; ASM64PWR4-DAG:   ld [[REGDADDR:[0-9]+]], LC19(2)
+; ASM64PWR4-DAG:   ld [[REGDADDR:[0-9]+]], L..C19(2)
 ; ASM64PWR4-DAG:   ld [[REGD:[0-9]+]], 0([[REGDADDR]])
-; ASM64PWR4-DAG:   ld [[REGF2ADDR:[0-9]+]], LC20(2)
+; ASM64PWR4-DAG:   ld [[REGF2ADDR:[0-9]+]], L..C20(2)
 ; ASM64PWR4-DAG:   lwz [[REGF2:[0-9]+]], 0([[REGF2ADDR]])
 ; ASM64PWR4-DAG:   std [[SCRATCHREG:[0-9]+]], 112(1)
 ; ASM64PWR4-DAG:   std [[SCRATCHREG:[0-9]+]], 120(1)
@@ -2243,33 +2243,33 @@ define void @caller_mix() {
 ; 32BIT-DAG:   $r9 = LI 7
 ; 32BIT-DAG:   $r10 = LI 8
 ; 32BIT-DAG:   STW killed renamable $r[[REG1:[0-9]+]], 56, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[REG2:[0-9]+]], 60, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[REG2:[0-9]+]], 60, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG3:[0-9]+]], 64, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[REG4:[0-9]+]], 68, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[REG4:[0-9]+]], 68, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG5:[0-9]+]], 72, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[REG6:[0-9]+]], 76, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[REG6:[0-9]+]], 76, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG7:[0-9]+]], 80, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[REG8:[0-9]+]], 84, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[REG8:[0-9]+]], 84, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG9:[0-9]+]], 88, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[REG10:[0-9]+]], 92, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[REG10:[0-9]+]], 92, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG11:[0-9]+]], 96, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[REG12:[0-9]+]], 100, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[REG12:[0-9]+]], 100, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG13:[0-9]+]], 104, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[REG14:[0-9]+]], 108, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[REG14:[0-9]+]], 108, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG15:[0-9]+]], 112, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[REG16:[0-9]+]], 116, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[REG16:[0-9]+]], 116, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG17:[0-9]+]], 120, $r1 :: (store 4, align 8)
 ; 32BIT-DAG:   STW killed renamable $r[[REG18:[0-9]+]], 128, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW renamable $r[[REG19:[0-9]+]], 124, $r1 :: (store 4)
-; 32BIT-DAG:   STW killed renamable $r[[REG20:[0-9]+]], 132, $r1 :: (store 4)
+; 32BIT-DAG:   STW renamable $r[[REG19:[0-9]+]], 124, $r1 :: (store 4 + 4)
+; 32BIT-DAG:   STW killed renamable $r[[REG20:[0-9]+]], 132, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG21:[0-9]+]], 136, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[REG22:[0-9]+]], 140, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[REG22:[0-9]+]], 140, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG23:[0-9]+]], 144, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[REG24:[0-9]+]], 148, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[REG24:[0-9]+]], 148, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG25:[0-9]+]], 152, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[REG26:[0-9]+]], 156, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[REG26:[0-9]+]], 156, $r1 :: (store 4 + 4)
 ; 32BIT-DAG:   STW killed renamable $r[[REG27:[0-9]+]], 160, $r1 :: (store 4, align 8)
-; 32BIT-DAG:   STW killed renamable $r[[REG28:[0-9]+]], 164, $r1 :: (store 4)
+; 32BIT-DAG:   STW killed renamable $r[[REG28:[0-9]+]], 164, $r1 :: (store 4 + 4)
 ; 32BIT-NEXT:  BL_NOP <mcsymbol .mix_floats>, csr_aix32, implicit-def dead $lr, implicit $rm, implicit $r3, implicit $r4, implicit $r5, implicit $r6, implicit $r7, implicit $r8, implicit $r9, implicit $r10, implicit $f1, implicit $f2, implicit $f3, implicit $f4, implicit $f5, implicit $f6, implicit $f7, implicit $f8, implicit $f9, implicit $f10, implicit $f11, implicit $f12, implicit $f13, implicit $r2, implicit-def $r1, implicit-def dead $r3
 ; 32BIT-NEXT:   ADJCALLSTACKUP 168, 0, implicit-def dead $r1, implicit $r1
 
@@ -2333,11 +2333,11 @@ define void @caller_mix() {
 ; ASM32PWR4-DAG:   stw [[REG:[0-9]+]], 156(1)
 ; ASM32PWR4-DAG:   stw [[REG:[0-9]+]], 160(1)
 ; ASM32PWR4-DAG:   stw [[REG:[0-9]+]], 164(1)
-; ASM32PWR4-DAG:  bl .mix_floats
+; ASM32PWR4:       bl .mix_floats
 
 ; ASM64PWR4:      mflr 0
 ; ASM64PWR4-DAG:  std 0, 16(1)
-; ASM64PWR4-DAG:  stdu 1, -240(1)
+; ASM64PWR4-DAG:  stdu 1, -256(1)
 ; ASM64PWR4-DAG:  std [[REG:[0-9]+]], 112(1)
 ; ASM64PWR4-DAG:  std [[REG:[0-9]+]], 120(1)
 ; ASM64PWR4-DAG:  std [[REG:[0-9]+]], 128(1)
@@ -2352,9 +2352,4 @@ define void @caller_mix() {
 ; ASM64PWR4-DAG:  std [[REG:[0-9]+]], 200(1)
 ; ASM64PWR4-DAG:  std [[REG:[0-9]+]], 208(1)
 ; ASM64PWR4-DAG:  std [[REG:[0-9]+]], 216(1)
-; ASM64PWR4-DAG:  std [[REG:[0-9]+]], 224(1)
-; ASM64PWR4-DAG:  std [[REG:[0-9]+]], 232(1)
-; ASM64PWR4-DAG:  bl .mix_floats
-; ASM64PWR4-DAG:  ld [[REGF1:[0-9]+]], 232(1)
-; ASM64PWR4-DAG:  ld [[REGF2:[0-9]+]], 224(1)
-; ASM64PWR4-DAG: blr
+; ASM64PWR4:      bl .mix_floats

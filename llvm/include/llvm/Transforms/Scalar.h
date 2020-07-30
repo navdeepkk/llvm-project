@@ -14,6 +14,7 @@
 #ifndef LLVM_TRANSFORMS_SCALAR_H
 #define LLVM_TRANSFORMS_SCALAR_H
 
+#include "llvm/Transforms/Utils/SimplifyCFGOptions.h"
 #include <functional>
 
 namespace llvm {
@@ -22,10 +23,6 @@ class Function;
 class FunctionPass;
 class ModulePass;
 class Pass;
-class GetElementPtrInst;
-class PassInfo;
-class TargetLowering;
-class TargetMachine;
 
 //===----------------------------------------------------------------------===//
 //
@@ -260,8 +257,7 @@ FunctionPass *createJumpThreadingPass(int Threshold = -1);
 // simplify terminator instructions, convert switches to lookup tables, etc.
 //
 FunctionPass *createCFGSimplificationPass(
-    unsigned Threshold = 1, bool ForwardSwitchCond = false,
-    bool ConvertSwitch = false, bool KeepLoops = true, bool SinkCommon = false,
+    SimplifyCFGOptions Options = SimplifyCFGOptions(),
     std::function<bool(const Function &)> Ftor = nullptr);
 
 //===----------------------------------------------------------------------===//
@@ -371,6 +367,13 @@ Pass *createLowerGuardIntrinsicPass();
 // LowerMatrixIntrinsics - Lower matrix intrinsics to vector operations.
 //
 Pass *createLowerMatrixIntrinsicsPass();
+
+//===----------------------------------------------------------------------===//
+//
+// LowerMatrixIntrinsicsMinimal - Lower matrix intrinsics to vector operations
+//                               (lightweight, does not require extra analysis)
+//
+Pass *createLowerMatrixIntrinsicsMinimalPass();
 
 //===----------------------------------------------------------------------===//
 //

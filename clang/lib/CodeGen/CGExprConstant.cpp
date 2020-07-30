@@ -777,7 +777,7 @@ bool ConstStructBuilder::Build(const APValue &Val, const RecordDecl *RD,
 
   if (const CXXRecordDecl *CD = dyn_cast<CXXRecordDecl>(RD)) {
     // Add a vtable pointer, if we need one and it hasn't already been added.
-    if (CD->isDynamicClass() && !IsPrimaryBase) {
+    if (Layout.hasOwnVFPtr()) {
       llvm::Constant *VTableAddressPoint =
           CGM.getCXXABI().getVTableAddressPointForConstExpr(
               BaseSubobject(CD, Offset), VTableClass);
@@ -1011,6 +1011,8 @@ public:
   }
 
   llvm::Constant *VisitConstantExpr(ConstantExpr *CE, QualType T) {
+    if (llvm::Constant *Result = Emitter.tryEmitConstantExpr(CE))
+      return Result;
     return Visit(CE->getSubExpr(), T);
   }
 
@@ -1356,6 +1358,20 @@ ConstantEmitter::tryEmitAbstract(const APValue &value, QualType destType) {
   auto state = pushAbstract();
   auto C = tryEmitPrivate(value, destType);
   return validateAndPopAbstract(C, state);
+}
+
+llvm::Constant *ConstantEmitter::tryEmitConstantExpr(const ConstantExpr *CE) {
+  if (!CE->hasAPValueResult())
+    return nullptr;
+  const Expr *Inner = CE->getSubExpr()->IgnoreImplicit();
+  QualType RetType;
+  if (auto *Call = dyn_cast<CallExpr>(Inner))
+    RetType = Call->getCallReturnType(CGF->getContext());
+  else if (auto *Ctor = dyn_cast<CXXConstructExpr>(Inner))
+    RetType = Ctor->getType();
+  llvm::Constant *Res =
+      emitAbstract(CE->getBeginLoc(), CE->getAPValueResult(), RetType);
+  return Res;
 }
 
 llvm::Constant *
@@ -1766,7 +1782,6 @@ private:
   ConstantLValue VisitCallExpr(const CallExpr *E);
   ConstantLValue VisitBlockExpr(const BlockExpr *E);
   ConstantLValue VisitCXXTypeidExpr(const CXXTypeidExpr *E);
-  ConstantLValue VisitCXXUuidofExpr(const CXXUuidofExpr *E);
   ConstantLValue VisitMaterializeTemporaryExpr(
                                          const MaterializeTemporaryExpr *E);
 
@@ -1881,6 +1896,9 @@ ConstantLValueEmitter::tryEmitBase(const APValue::LValueBase &base) {
       }
     }
 
+    if (auto *GD = dyn_cast<MSGuidDecl>(D))
+      return CGM.GetAddrOfMSGuidDecl(GD);
+
     return nullptr;
   }
 
@@ -1901,6 +1919,8 @@ ConstantLValueEmitter::tryEmitBase(const APValue::LValueBase &base) {
 
 ConstantLValue
 ConstantLValueEmitter::VisitConstantExpr(const ConstantExpr *E) {
+  if (llvm::Constant *Result = Emitter.tryEmitConstantExpr(E))
+    return Result;
   return Visit(E->getSubExpr());
 }
 
@@ -1988,11 +2008,6 @@ ConstantLValueEmitter::VisitCXXTypeidExpr(const CXXTypeidExpr *E) {
   else
     T = E->getExprOperand()->getType();
   return CGM.GetAddrOfRTTIDescriptor(T);
-}
-
-ConstantLValue
-ConstantLValueEmitter::VisitCXXUuidofExpr(const CXXUuidofExpr *E) {
-  return CGM.GetAddrOfUuidDescriptor(E);
 }
 
 ConstantLValue

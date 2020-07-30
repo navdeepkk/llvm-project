@@ -95,6 +95,7 @@ class LoadUnloadTestCase(TestBase):
     @not_remote_testsuite_ready
     @skipIfWindows  # Windows doesn't have dlopen and friends, dynamic libraries work differently
     @expectedFailureNetBSD
+    @skipIfReproducer # VFS is a snapshot.
     def test_modules_search_paths(self):
         """Test target modules list after loading a different copy of the library libd.dylib, and verifies that it works with 'target modules search-paths add'."""
         if self.platformIsDarwin():
@@ -186,8 +187,6 @@ class LoadUnloadTestCase(TestBase):
                     substrs=[os.path.basename(old_dylib)],
                     matching=True)
 
-        self.runCmd(env_cmd_string)
-
         lldbutil.run_break_set_by_file_and_line(
             self, "d.cpp", self.line_d_function, num_expected_locations=1)
         # After run, make sure the non-hidden library is picked up.
@@ -224,6 +223,7 @@ class LoadUnloadTestCase(TestBase):
         self.setSvr4Support(True)
         self.run_lldb_process_load_and_unload_commands()
 
+    @skipIfReproducer # FIXME: Unexpected packet during (passive) replay
     def run_lldb_process_load_and_unload_commands(self):
         """Test that lldb process load/unload command work correctly."""
         self.copy_shlibs_to_remote()
@@ -268,7 +268,7 @@ class LoadUnloadTestCase(TestBase):
         output = self.res.GetOutput()
         pattern = re.compile("Image ([0-9]+) loaded")
         for l in output.split(os.linesep):
-            #print("l:", l)
+            self.trace("l:", l)
             match = pattern.search(l)
             if match:
                 break
@@ -345,15 +345,11 @@ class LoadUnloadTestCase(TestBase):
                     substrs=[' resolved, hit count = 2'])
 
     @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
-    @expectedFailureAll(archs="aarch64", oslist="linux",
-                        bugnumber="https://bugs.llvm.org/show_bug.cgi?id=27806")
     def test_step_over_load(self):
         self.setSvr4Support(False)
         self.run_step_over_load()
 
     @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
-    @expectedFailureAll(archs="aarch64", oslist="linux",
-                        bugnumber="https://bugs.llvm.org/show_bug.cgi?id=27806")
     def test_step_over_load_with_svr4(self):
         self.setSvr4Support(True)
         self.run_step_over_load()

@@ -412,8 +412,10 @@ template <> struct ScalarTraits<Target> {
 
   static StringRef input(StringRef Scalar, void *, Target &Value) {
     auto Result = Target::create(Scalar);
-    if (!Result)
-      return toString(Result.takeError());
+    if (!Result) {
+      consumeError(Result.takeError());
+      return "unparsable target";
+    }
 
     Value = *Result;
     if (Value.Arch == AK_unknown)
@@ -1087,8 +1089,8 @@ struct DocumentListTraits<std::vector<const MachO::InterfaceFile *>> {
 };
 
 } // end namespace yaml.
+} // namespace llvm
 
-namespace MachO {
 static void DiagHandler(const SMDiagnostic &Diag, void *Context) {
   auto *File = static_cast<TextAPIContext *>(Context);
   SmallString<1024> Message;
@@ -1145,6 +1147,3 @@ Error TextAPIWriter::writeToStream(raw_ostream &OS, const InterfaceFile &File) {
 
   return Error::success();
 }
-
-} // end namespace MachO.
-} // end namespace llvm.

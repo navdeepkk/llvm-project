@@ -227,6 +227,8 @@ bool TypePrinter::canPrefixQualifiers(const Type *T,
     case Type::ObjCInterface:
     case Type::Atomic:
     case Type::Pipe:
+    case Type::ExtInt:
+    case Type::DependentExtInt:
       CanPrefixQualifiers = true;
       break;
 
@@ -254,6 +256,8 @@ bool TypePrinter::canPrefixQualifiers(const Type *T,
     case Type::DependentSizedExtVector:
     case Type::Vector:
     case Type::ExtVector:
+    case Type::ConstantMatrix:
+    case Type::DependentSizedMatrix:
     case Type::FunctionProto:
     case Type::FunctionNoProto:
     case Type::Paren:
@@ -718,6 +722,38 @@ void TypePrinter::printExtVectorAfter(const ExtVectorType *T, raw_ostream &OS) {
   OS << ")))";
 }
 
+void TypePrinter::printConstantMatrixBefore(const ConstantMatrixType *T,
+                                            raw_ostream &OS) {
+  printBefore(T->getElementType(), OS);
+  OS << " __attribute__((matrix_type(";
+  OS << T->getNumRows() << ", " << T->getNumColumns();
+  OS << ")))";
+}
+
+void TypePrinter::printConstantMatrixAfter(const ConstantMatrixType *T,
+                                           raw_ostream &OS) {
+  printAfter(T->getElementType(), OS);
+}
+
+void TypePrinter::printDependentSizedMatrixBefore(
+    const DependentSizedMatrixType *T, raw_ostream &OS) {
+  printBefore(T->getElementType(), OS);
+  OS << " __attribute__((matrix_type(";
+  if (T->getRowExpr()) {
+    T->getRowExpr()->printPretty(OS, nullptr, Policy);
+  }
+  OS << ", ";
+  if (T->getColumnExpr()) {
+    T->getColumnExpr()->printPretty(OS, nullptr, Policy);
+  }
+  OS << ")))";
+}
+
+void TypePrinter::printDependentSizedMatrixAfter(
+    const DependentSizedMatrixType *T, raw_ostream &OS) {
+  printAfter(T->getElementType(), OS);
+}
+
 void
 FunctionProtoType::printExceptionSpecification(raw_ostream &OS,
                                                const PrintingPolicy &Policy)
@@ -1114,6 +1150,28 @@ void TypePrinter::printPipeBefore(const PipeType *T, raw_ostream &OS) {
 
 void TypePrinter::printPipeAfter(const PipeType *T, raw_ostream &OS) {}
 
+void TypePrinter::printExtIntBefore(const ExtIntType *T, raw_ostream &OS) {
+  if (T->isUnsigned())
+    OS << "unsigned ";
+  OS << "_ExtInt(" << T->getNumBits() << ")";
+  spaceBeforePlaceHolder(OS);
+}
+
+void TypePrinter::printExtIntAfter(const ExtIntType *T, raw_ostream &OS) {}
+
+void TypePrinter::printDependentExtIntBefore(const DependentExtIntType *T,
+                                             raw_ostream &OS) {
+  if (T->isUnsigned())
+    OS << "unsigned ";
+  OS << "_ExtInt(";
+  T->getNumBitsExpr()->printPretty(OS, nullptr, Policy);
+  OS << ")";
+  spaceBeforePlaceHolder(OS);
+}
+
+void TypePrinter::printDependentExtIntAfter(const DependentExtIntType *T,
+                                            raw_ostream &OS) {}
+
 /// Appends the given scope to the end of a string.
 void TypePrinter::AppendScope(DeclContext *DC, raw_ostream &OS) {
   if (DC->isTranslationUnit()) return;
@@ -1305,7 +1363,12 @@ void TypePrinter::printTemplateSpecializationAfter(
 
 void TypePrinter::printInjectedClassNameBefore(const InjectedClassNameType *T,
                                                raw_ostream &OS) {
-  printTemplateSpecializationBefore(T->getInjectedTST(), OS);
+  if (Policy.PrintInjectedClassNameWithArguments)
+    return printTemplateSpecializationBefore(T->getInjectedTST(), OS);
+
+  IncludeStrongLifetimeRAII Strong(Policy);
+  T->getTemplateName().print(OS, Policy);
+  spaceBeforePlaceHolder(OS);
 }
 
 void TypePrinter::printInjectedClassNameAfter(const InjectedClassNameType *T,
@@ -1388,7 +1451,7 @@ void TypePrinter::printDependentTemplateSpecializationBefore(
 
   if (T->getQualifier())
     T->getQualifier()->print(OS, Policy);
-  OS << T->getIdentifier()->getName();
+  OS << "template " << T->getIdentifier()->getName();
   printTemplateArgumentList(OS, T->template_arguments(), Policy);
   spaceBeforePlaceHolder(OS);
 }
@@ -1501,6 +1564,8 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
 
   case attr::OpenCLPrivateAddressSpace:
   case attr::OpenCLGlobalAddressSpace:
+  case attr::OpenCLGlobalDeviceAddressSpace:
+  case attr::OpenCLGlobalHostAddressSpace:
   case attr::OpenCLLocalAddressSpace:
   case attr::OpenCLConstantAddressSpace:
   case attr::OpenCLGenericAddressSpace:
@@ -1568,6 +1633,9 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
     break;
   case attr::ArmMveStrictPolymorphism:
     OS << "__clang_arm_mve_strict_polymorphism";
+    break;
+  case attr::ArmSveVectorBits:
+    OS << "arm_sve_vector_bits";
     break;
   }
   OS << "))";
@@ -1800,6 +1868,10 @@ std::string Qualifiers::getAddrSpaceAsString(LangAS AS) {
     return "__constant";
   case LangAS::opencl_generic:
     return "__generic";
+  case LangAS::opencl_global_device:
+    return "__global_device";
+  case LangAS::opencl_global_host:
+    return "__global_host";
   case LangAS::cuda_device:
     return "__device__";
   case LangAS::cuda_constant:

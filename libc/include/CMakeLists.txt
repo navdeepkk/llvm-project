@@ -12,9 +12,15 @@ add_header(
 )
 
 add_header(
-  ctype
+  stdc_types
   HDR
-   ctype.h
+    __llvm-libc-stdc-types.h
+)
+
+add_gen_header(
+  ctype
+  DEF_FILE ctype.h.def
+  GEN_HDR ctype.h
   DEPENDS
     .llvm_libc_common_h
 )
@@ -25,6 +31,7 @@ add_gen_header(
   GEN_HDR math.h
   DEPENDS
     .llvm_libc_common_h
+    .stdc_types
 )
 
 add_gen_header(
@@ -80,13 +87,21 @@ add_gen_header(
   DEF_FILE stdio.h.def
   GEN_HDR stdio.h
   DEPENDS
-    llvm_libc_common_h
+    .llvm_libc_common_h
 )
 
 add_gen_header(
   stdlib
   DEF_FILE stdlib.h.def
   GEN_HDR stdlib.h
+  DEPENDS
+    .llvm_libc_common_h
+)
+
+add_gen_header(
+  unistd
+  DEF_FILE unistd.h.def
+  GEN_HDR unistd.h
   DEPENDS
     .llvm_libc_common_h
 )

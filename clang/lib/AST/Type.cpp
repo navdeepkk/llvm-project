@@ -282,6 +282,53 @@ void DependentAddressSpaceType::Profile(llvm::FoldingSetNodeID &ID,
   AddrSpaceExpr->Profile(ID, Context, true);
 }
 
+MatrixType::MatrixType(TypeClass tc, QualType matrixType, QualType canonType,
+                       const Expr *RowExpr, const Expr *ColumnExpr)
+    : Type(tc, canonType,
+           (RowExpr ? (matrixType->getDependence() | TypeDependence::Dependent |
+                       TypeDependence::Instantiation |
+                       (matrixType->isVariablyModifiedType()
+                            ? TypeDependence::VariablyModified
+                            : TypeDependence::None) |
+                       (matrixType->containsUnexpandedParameterPack() ||
+                                (RowExpr &&
+                                 RowExpr->containsUnexpandedParameterPack()) ||
+                                (ColumnExpr &&
+                                 ColumnExpr->containsUnexpandedParameterPack())
+                            ? TypeDependence::UnexpandedPack
+                            : TypeDependence::None))
+                    : matrixType->getDependence())),
+      ElementType(matrixType) {}
+
+ConstantMatrixType::ConstantMatrixType(QualType matrixType, unsigned nRows,
+                                       unsigned nColumns, QualType canonType)
+    : ConstantMatrixType(ConstantMatrix, matrixType, nRows, nColumns,
+                         canonType) {}
+
+ConstantMatrixType::ConstantMatrixType(TypeClass tc, QualType matrixType,
+                                       unsigned nRows, unsigned nColumns,
+                                       QualType canonType)
+    : MatrixType(tc, matrixType, canonType) {
+  ConstantMatrixTypeBits.NumRows = nRows;
+  ConstantMatrixTypeBits.NumColumns = nColumns;
+}
+
+DependentSizedMatrixType::DependentSizedMatrixType(
+    const ASTContext &CTX, QualType ElementType, QualType CanonicalType,
+    Expr *RowExpr, Expr *ColumnExpr, SourceLocation loc)
+    : MatrixType(DependentSizedMatrix, ElementType, CanonicalType, RowExpr,
+                 ColumnExpr),
+      Context(CTX), RowExpr(RowExpr), ColumnExpr(ColumnExpr), loc(loc) {}
+
+void DependentSizedMatrixType::Profile(llvm::FoldingSetNodeID &ID,
+                                       const ASTContext &CTX,
+                                       QualType ElementType, Expr *RowExpr,
+                                       Expr *ColumnExpr) {
+  ID.AddPointer(ElementType.getAsOpaquePtr());
+  RowExpr->Profile(ID, CTX, true);
+  ColumnExpr->Profile(ID, CTX, true);
+}
+
 VectorType::VectorType(QualType vecType, unsigned nElements, QualType canonType,
                        VectorKind vecKind)
     : VectorType(Vector, vecType, nElements, canonType, vecKind) {}
@@ -291,6 +338,31 @@ VectorType::VectorType(TypeClass tc, QualType vecType, unsigned nElements,
     : Type(tc, canonType, vecType->getDependence()), ElementType(vecType) {
   VectorTypeBits.VecKind = vecKind;
   VectorTypeBits.NumElements = nElements;
+}
+
+ExtIntType::ExtIntType(bool IsUnsigned, unsigned NumBits)
+    : Type(ExtInt, QualType{}, TypeDependence::None), IsUnsigned(IsUnsigned),
+      NumBits(NumBits) {}
+
+DependentExtIntType::DependentExtIntType(const ASTContext &Context,
+                                         bool IsUnsigned, Expr *NumBitsExpr)
+    : Type(DependentExtInt, QualType{},
+           toTypeDependence(NumBitsExpr->getDependence())),
+      Context(Context), ExprAndUnsigned(NumBitsExpr, IsUnsigned) {}
+
+bool DependentExtIntType::isUnsigned() const {
+  return ExprAndUnsigned.getInt();
+}
+
+clang::Expr *DependentExtIntType::getNumBitsExpr() const {
+  return ExprAndUnsigned.getPointer();
+}
+
+void DependentExtIntType::Profile(llvm::FoldingSetNodeID &ID,
+                                  const ASTContext &Context, bool IsUnsigned,
+                                  Expr *NumBitsExpr) {
+  ID.AddBoolean(IsUnsigned);
+  NumBitsExpr->Profile(ID, Context, true);
 }
 
 /// getArrayElementTypeNoTypeQual - If this is an array type, return the
@@ -938,6 +1010,17 @@ public:
     return Ctx.getExtVectorType(elementType, T->getNumElements());
   }
 
+  QualType VisitConstantMatrixType(const ConstantMatrixType *T) {
+    QualType elementType = recurse(T->getElementType());
+    if (elementType.isNull())
+      return {};
+    if (elementType.getAsOpaquePtr() == T->getElementType().getAsOpaquePtr())
+      return QualType(T, 0);
+
+    return Ctx.getConstantMatrixType(elementType, T->getNumRows(),
+                                     T->getNumColumns());
+  }
+
   QualType VisitFunctionNoProtoType(const FunctionNoProtoType *T) {
     QualType returnType = recurse(T->getReturnType());
     if (returnType.isNull())
@@ -1103,9 +1186,6 @@ public:
                            T->getTypeConstraintConcept(),
                            T->getTypeConstraintArguments());
   }
-
-  // FIXME: Non-trivial to implement, but important for C++
-  SUGARED_TYPE_CLASS(PackExpansion)
 
   QualType VisitObjCObjectType(const ObjCObjectType *T) {
     QualType baseType = recurse(T->getBaseType());
@@ -1757,6 +1837,14 @@ namespace {
       return Visit(T->getElementType());
     }
 
+    Type *VisitDependentSizedMatrixType(const DependentSizedMatrixType *T) {
+      return Visit(T->getElementType());
+    }
+
+    Type *VisitConstantMatrixType(const ConstantMatrixType *T) {
+      return Visit(T->getElementType());
+    }
+
     Type *VisitFunctionProtoType(const FunctionProtoType *T) {
       if (Syntactic && T->hasTrailingReturn())
         return const_cast<FunctionProtoType*>(T);
@@ -1836,13 +1924,17 @@ bool Type::isIntegralType(const ASTContext &Ctx) const {
     if (const auto *ET = dyn_cast<EnumType>(CanonicalType))
       return ET->getDecl()->isComplete();
 
-  return false;
+  return isExtIntType();
 }
 
 bool Type::isIntegralOrUnscopedEnumerationType() const {
   if (const auto *BT = dyn_cast<BuiltinType>(CanonicalType))
     return BT->getKind() >= BuiltinType::Bool &&
            BT->getKind() <= BuiltinType::Int128;
+
+  if (isExtIntType())
+    return true;
+
   return isUnscopedEnumerationType();
 }
 
@@ -1923,6 +2015,9 @@ bool Type::isSignedIntegerType() const {
       return ET->getDecl()->getIntegerType()->isSignedIntegerType();
   }
 
+  if (const ExtIntType *IT = dyn_cast<ExtIntType>(CanonicalType))
+    return IT->isSigned();
+
   return false;
 }
 
@@ -1936,6 +2031,10 @@ bool Type::isSignedIntegerOrEnumerationType() const {
     if (ET->getDecl()->isComplete())
       return ET->getDecl()->getIntegerType()->isSignedIntegerType();
   }
+
+  if (const ExtIntType *IT = dyn_cast<ExtIntType>(CanonicalType))
+    return IT->isSigned();
+
 
   return false;
 }
@@ -1963,6 +2062,9 @@ bool Type::isUnsignedIntegerType() const {
       return ET->getDecl()->getIntegerType()->isUnsignedIntegerType();
   }
 
+  if (const ExtIntType *IT = dyn_cast<ExtIntType>(CanonicalType))
+    return IT->isUnsigned();
+
   return false;
 }
 
@@ -1976,6 +2078,9 @@ bool Type::isUnsignedIntegerOrEnumerationType() const {
     if (ET->getDecl()->isComplete())
       return ET->getDecl()->getIntegerType()->isUnsignedIntegerType();
   }
+
+  if (const ExtIntType *IT = dyn_cast<ExtIntType>(CanonicalType))
+    return IT->isUnsigned();
 
   return false;
 }
@@ -2015,13 +2120,14 @@ bool Type::isRealType() const {
            BT->getKind() <= BuiltinType::Float128;
   if (const auto *ET = dyn_cast<EnumType>(CanonicalType))
       return ET->getDecl()->isComplete() && !ET->getDecl()->isScoped();
-  return false;
+  return isExtIntType();
 }
 
 bool Type::isArithmeticType() const {
   if (const auto *BT = dyn_cast<BuiltinType>(CanonicalType))
     return BT->getKind() >= BuiltinType::Bool &&
-           BT->getKind() <= BuiltinType::Float128;
+           BT->getKind() <= BuiltinType::Float128 &&
+           BT->getKind() != BuiltinType::BFloat16;
   if (const auto *ET = dyn_cast<EnumType>(CanonicalType))
     // GCC allows forward declaration of enum types (forbid by C99 6.7.2.3p2).
     // If a body isn't seen by the time we get here, return false.
@@ -2030,7 +2136,7 @@ bool Type::isArithmeticType() const {
     // false for scoped enumerations since that will disable any
     // unwanted implicit conversions.
     return !ET->getDecl()->isScoped() && ET->getDecl()->isComplete();
-  return isa<ComplexType>(CanonicalType);
+  return isa<ComplexType>(CanonicalType) || isExtIntType();
 }
 
 Type::ScalarTypeKind Type::getScalarTypeKind() const {
@@ -2059,6 +2165,8 @@ Type::ScalarTypeKind Type::getScalarTypeKind() const {
     if (CT->getElementType()->isRealFloatingType())
       return STK_FloatingComplex;
     return STK_IntegralComplex;
+  } else if (isExtIntType()) {
+    return STK_Integral;
   }
 
   llvm_unreachable("unknown scalar type");
@@ -2183,6 +2291,37 @@ bool Type::isSizelessBuiltinType() const {
 
 bool Type::isSizelessType() const { return isSizelessBuiltinType(); }
 
+bool Type::isVLSTBuiltinType() const {
+  if (const BuiltinType *BT = getAs<BuiltinType>()) {
+    switch (BT->getKind()) {
+    case BuiltinType::SveInt8:
+    case BuiltinType::SveInt16:
+    case BuiltinType::SveInt32:
+    case BuiltinType::SveInt64:
+    case BuiltinType::SveUint8:
+    case BuiltinType::SveUint16:
+    case BuiltinType::SveUint32:
+    case BuiltinType::SveUint64:
+    case BuiltinType::SveFloat16:
+    case BuiltinType::SveFloat32:
+    case BuiltinType::SveFloat64:
+    case BuiltinType::SveBFloat16:
+    case BuiltinType::SveBool:
+      return true;
+    default:
+      return false;
+    }
+  }
+  return false;
+}
+
+bool Type::isVLST() const {
+  if (!isVLSTBuiltinType())
+    return false;
+
+  return hasAttr(attr::ArmSveVectorBits);
+}
+
 bool QualType::isPODType(const ASTContext &Context) const {
   // C++11 has a more relaxed definition of POD.
   if (Context.getLangOpts().CPlusPlus11)
@@ -2224,6 +2363,7 @@ bool QualType::isCXX98PODType(const ASTContext &Context) const {
   case Type::MemberPointer:
   case Type::Vector:
   case Type::ExtVector:
+  case Type::ExtInt:
     return true;
 
   case Type::Enum:
@@ -2803,6 +2943,8 @@ StringRef BuiltinType::getName(const PrintingPolicy &Policy) const {
     return "unsigned __int128";
   case Half:
     return Policy.Half ? "half" : "__fp16";
+  case BFloat16:
+    return "__bf16";
   case Float:
     return "float";
   case Double:
@@ -2906,6 +3048,8 @@ StringRef BuiltinType::getName(const PrintingPolicy &Policy) const {
     return "queue_t";
   case OCLReserveID:
     return "reserve_id_t";
+  case IncompleteMatrixIdx:
+    return "<incomplete matrix index type>";
   case OMPArraySection:
     return "<OpenMP array section type>";
   case OMPArrayShaping:
@@ -2923,6 +3067,13 @@ StringRef BuiltinType::getName(const PrintingPolicy &Policy) const {
   }
 
   llvm_unreachable("Invalid builtin type.");
+}
+
+QualType QualType::getNonPackExpansionType() const {
+  // We never wrap type sugar around a PackExpansionType.
+  if (auto *PET = dyn_cast<PackExpansionType>(getTypePtr()))
+    return PET->getPattern();
+  return *this;
 }
 
 QualType QualType::getNonLValueExprType(const ASTContext &Context) const {
@@ -3194,6 +3345,12 @@ void FunctionProtoType::Profile(llvm::FoldingSetNodeID &ID,
           getExtProtoInfo(), Ctx, isCanonicalUnqualified());
 }
 
+TypedefType::TypedefType(TypeClass tc, const TypedefNameDecl *D, QualType can)
+    : Type(tc, can, D->getUnderlyingType()->getDependence()),
+      Decl(const_cast<TypedefNameDecl *>(D)) {
+  assert(!isa<TypedefType>(can) && "Invalid canonical type");
+}
+
 QualType TypedefType::desugar() const {
   return getDecl()->getUnderlyingType();
 }
@@ -3460,7 +3617,7 @@ TemplateSpecializationType::TemplateSpecializationType(
 
   auto *TemplateArgs = reinterpret_cast<TemplateArgument *>(this + 1);
   for (const TemplateArgument &Arg : Args) {
-    // Update instantiation-dependent and variably-modified bits.
+    // Update instantiation-dependent, variably-modified, and error bits.
     // If the canonical type exists and is non-dependent, the template
     // specialization type can be non-dependent even if one of the type
     // arguments is. Given:
@@ -3532,15 +3689,17 @@ void ObjCObjectTypeImpl::Profile(llvm::FoldingSetNodeID &ID) {
 
 void ObjCTypeParamType::Profile(llvm::FoldingSetNodeID &ID,
                                 const ObjCTypeParamDecl *OTPDecl,
+                                QualType CanonicalType,
                                 ArrayRef<ObjCProtocolDecl *> protocols) {
   ID.AddPointer(OTPDecl);
+  ID.AddPointer(CanonicalType.getAsOpaquePtr());
   ID.AddInteger(protocols.size());
   for (auto proto : protocols)
     ID.AddPointer(proto);
 }
 
 void ObjCTypeParamType::Profile(llvm::FoldingSetNodeID &ID) {
-  Profile(ID, getDecl(),
+  Profile(ID, getDecl(), getCanonicalTypeInternal(),
           llvm::makeArrayRef(qual_begin(), getNumProtocols()));
 }
 
@@ -3643,6 +3802,7 @@ static CachedProperties computeCachedProperties(const Type *T) {
     // here in error recovery.
     return CachedProperties(ExternalLinkage, false);
 
+  case Type::ExtInt:
   case Type::Builtin:
     // C++ [basic.link]p8:
     //   A type is said to have linkage if and only if:
@@ -3688,6 +3848,8 @@ static CachedProperties computeCachedProperties(const Type *T) {
   case Type::Vector:
   case Type::ExtVector:
     return Cache::get(cast<VectorType>(T)->getElementType());
+  case Type::ConstantMatrix:
+    return Cache::get(cast<ConstantMatrixType>(T)->getElementType());
   case Type::FunctionNoProto:
     return Cache::get(cast<FunctionType>(T)->getReturnType());
   case Type::FunctionProto: {
@@ -3740,6 +3902,7 @@ LinkageInfo LinkageComputer::computeTypeLinkageInfo(const Type *T) {
     assert(T->isInstantiationDependentType());
     return LinkageInfo::external();
 
+  case Type::ExtInt:
   case Type::Builtin:
     return LinkageInfo::external();
 
@@ -3773,6 +3936,9 @@ LinkageInfo LinkageComputer::computeTypeLinkageInfo(const Type *T) {
   case Type::Vector:
   case Type::ExtVector:
     return computeTypeLinkageInfo(cast<VectorType>(T)->getElementType());
+  case Type::ConstantMatrix:
+    return computeTypeLinkageInfo(
+        cast<ConstantMatrixType>(T)->getElementType());
   case Type::FunctionNoProto:
     return computeTypeLinkageInfo(cast<FunctionType>(T)->getReturnType());
   case Type::FunctionProto: {
@@ -3917,6 +4083,7 @@ bool Type::canHaveNullability(bool ResultIfUnknown) const {
 #include "clang/Basic/AArch64SVEACLETypes.def"
     case BuiltinType::BuiltinFn:
     case BuiltinType::NullPtr:
+    case BuiltinType::IncompleteMatrixIdx:
     case BuiltinType::OMPArraySection:
     case BuiltinType::OMPArrayShaping:
     case BuiltinType::OMPIterator:
@@ -3936,6 +4103,8 @@ bool Type::canHaveNullability(bool ResultIfUnknown) const {
   case Type::DependentSizedExtVector:
   case Type::Vector:
   case Type::ExtVector:
+  case Type::ConstantMatrix:
+  case Type::DependentSizedMatrix:
   case Type::DependentAddressSpace:
   case Type::FunctionProto:
   case Type::FunctionNoProto:
@@ -3948,6 +4117,8 @@ bool Type::canHaveNullability(bool ResultIfUnknown) const {
   case Type::ObjCInterface:
   case Type::Atomic:
   case Type::Pipe:
+  case Type::ExtInt:
+  case Type::DependentExtInt:
     return false;
   }
   llvm_unreachable("bad type kind!");

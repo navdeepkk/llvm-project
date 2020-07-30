@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Passes/StandardInstrumentations.h"
+#include "llvm/ADT/Any.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Analysis/LazyCallGraph.h"
@@ -21,11 +22,18 @@
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassInstrumentation.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
+
+// TODO: remove once all required passes are marked as such.
+static cl::opt<bool>
+    EnableOptnone("enable-npm-optnone", cl::init(false),
+                  cl::desc("Enable skipping optional passes optnone functions "
+                           "under new pass manager"));
 
 namespace {
 
@@ -172,9 +180,9 @@ PrintIRInstrumentation::popModuleDesc(StringRef PassID) {
   return ModuleDesc;
 }
 
-bool PrintIRInstrumentation::printBeforePass(StringRef PassID, Any IR) {
+void PrintIRInstrumentation::printBeforePass(StringRef PassID, Any IR) {
   if (PassID.startswith("PassManager<") || PassID.contains("PassAdaptor<"))
-    return true;
+    return;
 
   // Saving Module for AfterPassInvalidated operations.
   // Note: here we rely on a fact that we do not change modules while
@@ -184,11 +192,11 @@ bool PrintIRInstrumentation::printBeforePass(StringRef PassID, Any IR) {
     pushModuleDesc(PassID, IR);
 
   if (!llvm::shouldPrintBeforePass(PassID))
-    return true;
+    return;
 
   SmallString<20> Banner = formatv("*** IR Dump Before {0} ***", PassID);
   unwrapAndPrint(IR, Banner, llvm::forcePrintModuleIR());
-  return true;
+  return;
 }
 
 void PrintIRInstrumentation::printAfterPass(StringRef PassID, Any IR) {
@@ -232,8 +240,8 @@ void PrintIRInstrumentation::registerCallbacks(
   // for later use in AfterPassInvalidated.
   StoreModuleDesc = llvm::forcePrintModuleIR() && llvm::shouldPrintAfterPass();
   if (llvm::shouldPrintBeforePass() || StoreModuleDesc)
-    PIC.registerBeforePassCallback(
-        [this](StringRef P, Any IR) { return this->printBeforePass(P, IR); });
+    PIC.registerBeforeNonSkippedPassCallback(
+        [this](StringRef P, Any IR) { this->printBeforePass(P, IR); });
 
   if (llvm::shouldPrintAfterPass()) {
     PIC.registerAfterPassCallback(
@@ -243,8 +251,32 @@ void PrintIRInstrumentation::registerCallbacks(
   }
 }
 
+void OptNoneInstrumentation::registerCallbacks(
+    PassInstrumentationCallbacks &PIC) {
+  PIC.registerBeforePassCallback(
+      [this](StringRef P, Any IR) { return this->skip(P, IR); });
+}
+
+bool OptNoneInstrumentation::skip(StringRef PassID, Any IR) {
+  if (!EnableOptnone)
+    return true;
+  const Function *F = nullptr;
+  if (any_isa<const Function *>(IR)) {
+    F = any_cast<const Function *>(IR);
+  } else if (any_isa<const Loop *>(IR)) {
+    F = any_cast<const Loop *>(IR)->getHeader()->getParent();
+  }
+  if (F && F->hasOptNone()) {
+    if (DebugLogging)
+      dbgs() << "Skipping pass: " << PassID << " (optnone)\n";
+    return false;
+  }
+  return true;
+}
+
 void StandardInstrumentations::registerCallbacks(
     PassInstrumentationCallbacks &PIC) {
   PrintIR.registerCallbacks(PIC);
   TimePasses.registerCallbacks(PIC);
+  OptNone.registerCallbacks(PIC);
 }

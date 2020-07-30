@@ -48,27 +48,14 @@ config.test_exec_root = os.path.join(config.flang_obj_root, 'test')
 llvm_config.with_environment('PATH', config.flang_tools_dir, append_path=True)
 llvm_config.with_environment('PATH', config.llvm_tools_dir, append_path=True)
 
-# For builds with FIR, set path for tco and enable related tests
-if config.flang_llvm_tools_dir != "" :
-  config.available_features.add('fir')
-  if config.llvm_tools_dir != config.flang_llvm_tools_dir :
-    llvm_config.with_environment('PATH', config.flang_llvm_tools_dir, append_path=True)
-
-config.substitutions.append(('%B', config.flang_obj_root))
-
 # For each occurrence of a flang tool name, replace it with the full path to
-# the build directory holding that tool.  We explicitly specify the directories
-# to search to ensure that we get the tools just built and not some random
-# tools that might happen to be in the user's PATH.
-tool_dirs = [config.llvm_tools_dir, config.flang_tools_dir]
-flang_includes = "-I" + config.flang_intrinsic_modules_dir
-
-tools = [ToolSubst('%flang', command=FindTool('flang'), unresolved='fatal'),
-         ToolSubst('%f18', command=FindTool('f18'), unresolved='fatal'),
-         ToolSubst('%f18_with_includes', command=FindTool('f18'),
-         extra_args=[flang_includes], unresolved='fatal')]
-
-llvm_config.add_tool_substitutions(tools, tool_dirs)
+# the build directory holding that tool.
+tools = [
+  ToolSubst('%f18', command=FindTool('f18'),
+    extra_args=["-intrinsic-module-directory "+config.flang_intrinsic_modules_dir],
+    unresolved='fatal')
+]
+llvm_config.add_tool_substitutions(tools, config.llvm_tools_dir)
 
 # Enable libpgmath testing
 result = lit_config.params.get("LIBPGMATH")

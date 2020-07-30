@@ -140,6 +140,7 @@ struct Configuration {
   bool safeSEH = false;
   Symbol *sehTable = nullptr;
   Symbol *sehCount = nullptr;
+  bool noSEH = false;
 
   // Used for /opt:lldlto=N
   unsigned ltoo = 2;
@@ -235,6 +236,8 @@ struct Configuration {
   bool swaprunNet = false;
   bool thinLTOEmitImportsFiles;
   bool thinLTOIndexOnly;
+  bool autoImport = false;
+  bool pseudoRelocs = false;
 };
 
 extern Configuration *config;
