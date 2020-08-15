@@ -141,4 +141,15 @@ def NVVM_MmaOp :
   let verifier = [{ return ::verify(*this); }];
 }
 
+def NVVM_Mmam16n8k8Op :
+  NVVM_Op<"wmma_m16n16k16.sync">,
+  Results<(outs LLVM_Type:$res)>,
+  Arguments<(ins Variadic<LLVM_Type>:$args)> {
+  string llvmBuilder = [{
+    $res = createIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_col_f32_f32, $args);
+  }];
+  let assemblyFormat = "$args attr-dict `:` functional-type($args, $res)";
+  // let verifier = [{ return ::verify(*this); }];
+}
 #endif // NVVMIR_OPS
