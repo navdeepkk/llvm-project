@@ -29,6 +29,7 @@ using namespace mlir;
 
 namespace mlir {
 // Defined in the test directory, no public header.
+void registerConvertCallOpPass();
 void registerConvertToTargetEnvPass();
 void registerInliner();
 void registerMemRefBoundCheck();
@@ -39,10 +40,9 @@ void registerSideEffectTestPasses();
 void registerSimpleParametricTilingPass();
 void registerSymbolTestPasses();
 void registerTestAffineDataCopyPass();
-void registerTestAllReduceLoweringPass();
 void registerTestAffineLoopUnswitchingPass();
+void registerTestAllReduceLoweringPass();
 void registerTestBufferPlacementPreparationPass();
-void registerTestLoopPermutationPass();
 void registerTestCallGraphPass();
 void registerTestConstantFold();
 void registerTestConvertGPUKernelToCubinPass();
@@ -51,12 +51,14 @@ void registerTestDominancePass();
 void registerTestExpandTanhPass();
 void registerTestFunc();
 void registerTestGpuMemoryPromotionPass();
+void registerTestGpuParallelLoopMappingPass();
 void registerTestInterfaces();
 void registerTestLinalgHoisting();
 void registerTestLinalgTransforms();
 void registerTestLivenessPass();
 void registerTestLoopFusion();
 void registerTestLoopMappingPass();
+void registerTestLoopPermutationPass();
 void registerTestLoopUnrollingPass();
 void registerTestMatchers();
 void registerTestMemRefDependenceCheck();
@@ -65,7 +67,6 @@ void registerTestOpaqueLoc();
 void registerTestPreparationPassWithAllowedMemrefResults();
 void registerTestRecursiveTypesPass();
 void registerTestReducer();
-void registerTestGpuParallelLoopMappingPass();
 void registerTestSpirvEntryPointABIPass();
 void registerTestSCFUtilsPass();
 void registerTestVectorConversions();
@@ -102,6 +103,7 @@ static cl::opt<bool> allowUnregisteredDialects(
 
 #ifdef MLIR_INCLUDE_TESTS
 void registerTestPasses() {
+  registerConvertCallOpPass();
   registerConvertToTargetEnvPass();
   registerInliner();
   registerMemRefBoundCheck();

@@ -549,10 +549,10 @@ void llvm::computeKnownBitsFromRangeMetadata(const MDNode &Ranges,
     // The first CommonPrefixBits of all values in Range are equal.
     unsigned CommonPrefixBits =
         (Range.getUnsignedMax() ^ Range.getUnsignedMin()).countLeadingZeros();
-
     APInt Mask = APInt::getHighBitsSet(BitWidth, CommonPrefixBits);
-    Known.One &= Range.getUnsignedMax() & Mask;
-    Known.Zero &= ~Range.getUnsignedMax() & Mask;
+    APInt UnsignedMax = Range.getUnsignedMax().zextOrTrunc(BitWidth);
+    Known.One &= UnsignedMax & Mask;
+    Known.Zero &= ~UnsignedMax & Mask;
   }
 }
 
@@ -1644,13 +1644,24 @@ static void computeKnownBitsFromOperator(const Operator *I,
       default: break;
       case Intrinsic::abs:
         computeKnownBits(I->getOperand(0), Known2, Depth + 1, Q);
-        // Otherwise, if this call is undefined for INT_MIN, the result is
-        // positive.
-        if (match(II->getArgOperand(1), m_One()))
-          Known.Zero.setSignBit();
+
+        // If the source's MSB is zero then we know the rest of the bits.
+        if (Known2.isNonNegative()) {
+          Known.Zero |= Known2.Zero;
+          Known.One |= Known2.One;
+          break;
+        }
+
         // Absolute value preserves trailing zero count.
         Known.Zero.setLowBits(Known2.Zero.countTrailingOnes());
-        // FIXME: Handle known negative/non-negative input?
+
+        // If this call is undefined for INT_MIN, the result is positive. We
+        // also know it can't be INT_MIN if there is a set bit that isn't the
+        // sign bit.
+        Known2.One.clearSignBit();
+        if (match(II->getArgOperand(1), m_One()) || Known2.One.getBoolValue())
+          Known.Zero.setSignBit();
+        // FIXME: Handle known negative input?
         // FIXME: Calculate the negated Known bits and combine them?
         break;
       case Intrinsic::bitreverse:
@@ -3000,6 +3011,19 @@ static unsigned ComputeNumSignBitsImpl(const Value *V,
       assert(Tmp <= Ty->getScalarSizeInBits() &&
              "Failed to determine minimum sign bits");
       return Tmp;
+    }
+    case Instruction::Call: {
+      if (const auto *II = dyn_cast<IntrinsicInst>(U)) {
+        switch (II->getIntrinsicID()) {
+        default: break;
+        case Intrinsic::abs:
+          Tmp = ComputeNumSignBits(U->getOperand(0), Depth + 1, Q);
+          if (Tmp == 1) break;
+
+          // Absolute value reduces number of sign bits by at most 1.
+          return Tmp - 1;
+        }
+      }
     }
     }
   }
@@ -6389,6 +6413,41 @@ static void setLimitsForIntrinsic(const IntrinsicInst &II, APInt &Lower,
         Upper = APInt::getSignedMaxValue(Width) - *C + 1;
       }
     }
+    break;
+  case Intrinsic::umin:
+  case Intrinsic::umax:
+  case Intrinsic::smin:
+  case Intrinsic::smax:
+    if (!match(II.getOperand(0), m_APInt(C)) &&
+        !match(II.getOperand(1), m_APInt(C)))
+      break;
+
+    switch (II.getIntrinsicID()) {
+    case Intrinsic::umin:
+      Upper = *C + 1;
+      break;
+    case Intrinsic::umax:
+      Lower = *C;
+      break;
+    case Intrinsic::smin:
+      Lower = APInt::getSignedMinValue(Width);
+      Upper = *C + 1;
+      break;
+    case Intrinsic::smax:
+      Lower = *C;
+      Upper = APInt::getSignedMaxValue(Width) + 1;
+      break;
+    default:
+      llvm_unreachable("Must be min/max intrinsic");
+    }
+    break;
+  case Intrinsic::abs:
+    // If abs of SIGNED_MIN is poison, then the result is [0..SIGNED_MAX],
+    // otherwise it is [0..SIGNED_MIN], as -SIGNED_MIN == SIGNED_MIN.
+    if (match(II.getOperand(1), m_One()))
+      Upper = APInt::getSignedMaxValue(Width) + 1;
+    else
+      Upper = APInt::getSignedMinValue(Width) + 1;
     break;
   default:
     break;

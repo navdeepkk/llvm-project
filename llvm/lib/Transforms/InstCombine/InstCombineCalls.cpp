@@ -769,6 +769,16 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     if (Value *V = lowerObjectSizeCall(II, DL, &TLI, /*MustSucceed=*/false))
       return replaceInstUsesWith(CI, V);
     return nullptr;
+  case Intrinsic::abs: {
+    Value *IIOperand = II->getArgOperand(0);
+    // abs(-x) -> abs(x)
+    // TODO: Copy nsw if it was present on the neg?
+    Value *X;
+    if (match(IIOperand, m_Neg(m_Value(X))))
+      return replaceOperand(*II, 0, X);
+
+    break;
+  }
   case Intrinsic::bswap: {
     Value *IIOperand = II->getArgOperand(0);
     Value *X = nullptr;
@@ -1462,6 +1472,27 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     // Update the cache of affected values for this assumption (we might be
     // here because we just simplified the condition).
     AC.updateAffectedValues(II);
+    break;
+  }
+  case Intrinsic::experimental_gc_statepoint: {
+    auto &GCSP = *cast<GCStatepointInst>(II);
+    // Let's we have the following case:
+    // A = gc.relocate(null)
+    // B = statepoint(A)
+    // C = gc.relocate(A)
+    // A will be substituted with null and its user B will be added to worklist.
+    // Statepoint B is not simplified and if C was considered before it will be
+    // re-considered after simplification of A.
+    // To resolve this case while processing statepoint B we add all gc.relocate
+    // users to worklist to give a chance to be simplified to null.
+    // This is to reduce the number of InstCombine iteration.
+    // Actually C can be transformed on the next iteration.
+    // chains in one iteration.
+    // TODO: we can handle relocation here, it will reduce the number of
+    // relocations to re-consider and also helps to reduce the number of
+    // gc live pointers in statepoint instruction bundle.
+    for (const GCRelocateInst *Reloc : GCSP.getGCRelocates())
+      Worklist.add(const_cast<GCRelocateInst *>(Reloc));
     break;
   }
   case Intrinsic::experimental_gc_relocate: {
