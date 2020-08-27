@@ -18,6 +18,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/IR/AffineValueMap.h"
 #include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/IR/Block.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Transforms/LoopUtils.h"
@@ -40,7 +41,8 @@ struct LoopTiling : public AffineLoopTilingBase<LoopTiling> {
 
   void runOnFunction() override;
   void getTileSizes(ArrayRef<AffineForOp> band,
-                    SmallVectorImpl<unsigned> *tileSizes);
+                    SmallVectorImpl<unsigned> *tileSizes,
+                    SmallVectorImpl<Value> *tilingParameters);
 
   // Default tile size if nothing is provided.
   constexpr static unsigned kDefaultTileSize = 4;
@@ -95,6 +97,8 @@ constructTiledIndexSetHyperRect(MutableArrayRef<AffineForOp> origLoops,
   for (unsigned i = 0; i < width; i++) {
     OperandRange newLbOperands = origLoops[i].getLowerBoundOperands();
     OperandRange newUbOperands = origLoops[i].getUpperBoundOperands();
+    ///\\\ Possible changes here. The bounds for the new loops does not have
+    // to be the same in parametric tiling because of semi-affine maps.
     newLoops[i].setLowerBound(newLbOperands, origLoops[i].getLowerBoundMap());
     newLoops[i].setUpperBound(newUbOperands, origLoops[i].getUpperBoundMap());
     newLoops[i].setStep(tileSizes[i]);
@@ -294,6 +298,7 @@ mlir::tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
   for (AffineForOp forOp : input)
     ops.push_back(forOp);
   getIndexSet(ops, &cst);
+  cst.dump();
   if (!cst.isHyperRectangular(0, width)) {
     rootAffineForOp.emitError("tiled code generation unimplemented for the "
                               "non-hyperrectangular case");
@@ -354,6 +359,31 @@ static void adjustToDivisorsOfTripCounts(ArrayRef<AffineForOp> band,
   }
 }
 
+// Checks if the function enclosing the loop nest has any arguments passed to
+// it. They will be ultimately used as tiling parameters.
+static LogicalResult checkIfParametersArePresent(ArrayRef<AffineForOp> band) {
+  AffineForOp topLoop = band[0];
+
+  if (auto funcOp = dyn_cast<FuncOp>(topLoop.getParentOp())) {
+    if (funcOp.getNumArguments() == band.size())
+      return success();
+  }
+
+  return failure();
+}
+
+// Captures tiling parameters, which are expected to be passed as arguments to
+// the function enclosing the loop nest.
+static void getTilingParameters(ArrayRef<AffineForOp> band,
+                                SmallVectorImpl<Value> *tilingParameters) {
+  AffineForOp topLoop = band[0];
+  auto funcOpRegion = topLoop.getParentRegion();
+
+  for (auto blockArgument : funcOpRegion->getArguments()) {
+    tilingParameters->push_back(blockArgument);
+  }
+}
+
 // Returns tile sizes to use. Checks CL options; if none are specified, sets it
 // based on a simple model that looks at the memory footprint and determines
 // tile sizes assuming identity accesses / 1:1 tile size proportional footprint
@@ -361,13 +391,18 @@ static void adjustToDivisorsOfTripCounts(ArrayRef<AffineForOp> band,
 // TODO: evolve this model. Tile size determination is a large area
 // to play with in general.
 void LoopTiling::getTileSizes(ArrayRef<AffineForOp> band,
-                              SmallVectorImpl<unsigned> *tileSizes) {
+                              SmallVectorImpl<unsigned> *tileSizes,
+                              SmallVectorImpl<Value> *tilingParameters) {
   if (band.empty())
     return;
 
   // Use command-line tileSize for all loops if specified.
   if (tileSize) {
     tileSizes->assign(band.size(), tileSize);
+    return;
+  } else if (succeeded(checkIfParametersArePresent(band))) {
+    // Use function arguments as tile sizes if present.
+    getTilingParameters(band, tilingParameters);
     return;
   }
 
@@ -443,7 +478,8 @@ void LoopTiling::runOnFunction() {
     // Set up tile sizes; fill missing tile sizes at the end with default tile
     // size or tileSize if one was provided.
     SmallVector<unsigned, 6> tileSizes;
-    getTileSizes(band, &tileSizes);
+    SmallVector<Value, 6> tilingParameters;
+    getTileSizes(band, &tileSizes, &tilingParameters);
     if (llvm::DebugFlag) {
       auto diag = band[0].emitRemark("using tile sizes [");
       for (auto tSize : tileSizes)
