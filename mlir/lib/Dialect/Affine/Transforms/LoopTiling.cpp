@@ -41,8 +41,7 @@ struct LoopTiling : public AffineLoopTilingBase<LoopTiling> {
 
   void runOnFunction() override;
   void getTileSizes(ArrayRef<AffineForOp> band,
-                    SmallVectorImpl<unsigned> *tileSizes,
-                    SmallVectorImpl<Value> *tilingParameters);
+                    SmallVectorImpl<unsigned> *tileSizes);
 
   // Default tile size if nothing is provided.
   constexpr static unsigned kDefaultTileSize = 4;
@@ -361,15 +360,15 @@ static void adjustToDivisorsOfTripCounts(ArrayRef<AffineForOp> band,
 
 // Checks if the function enclosing the loop nest has any arguments passed to
 // it. They will be ultimately used as tiling parameters.
-static LogicalResult checkIfParametersArePresent(ArrayRef<AffineForOp> band) {
+static void checkIfParametersArePresent(ArrayRef<AffineForOp> band) {
+  assert(!band.empty() && "no loops in input band");
   AffineForOp topLoop = band[0];
 
   if (auto funcOp = dyn_cast<FuncOp>(topLoop.getParentOp())) {
-    if (funcOp.getNumArguments() == band.size())
-      return success();
+    assert(funcOp.getNumArguments() == band.size() &&
+           "Too few/many tile sizes");
+    return;
   }
-
-  return failure();
 }
 
 // Captures tiling parameters, which are expected to be passed as arguments to
@@ -391,18 +390,13 @@ static void getTilingParameters(ArrayRef<AffineForOp> band,
 // TODO: evolve this model. Tile size determination is a large area
 // to play with in general.
 void LoopTiling::getTileSizes(ArrayRef<AffineForOp> band,
-                              SmallVectorImpl<unsigned> *tileSizes,
-                              SmallVectorImpl<Value> *tilingParameters) {
+                              SmallVectorImpl<unsigned> *tileSizes) {
   if (band.empty())
     return;
 
   // Use command-line tileSize for all loops if specified.
   if (tileSize) {
     tileSizes->assign(band.size(), tileSize);
-    return;
-  } else if (succeeded(checkIfParametersArePresent(band))) {
-    // Use function arguments as tile sizes if present.
-    getTilingParameters(band, tilingParameters);
     return;
   }
 
@@ -475,26 +469,37 @@ void LoopTiling::runOnFunction() {
 
   // Tile each band.
   for (auto &band : bands) {
-    // Set up tile sizes; fill missing tile sizes at the end with default tile
-    // size or tileSize if one was provided.
-    SmallVector<unsigned, 6> tileSizes;
-    SmallVector<Value, 6> tilingParameters;
-    getTileSizes(band, &tileSizes, &tilingParameters);
-    if (llvm::DebugFlag) {
-      auto diag = band[0].emitRemark("using tile sizes [");
-      for (auto tSize : tileSizes)
-        diag << tSize << ' ';
-      diag << "]\n";
-    }
-    SmallVector<AffineForOp, 6> tiledNest;
-    if (failed(tilePerfectlyNested(band, tileSizes, &tiledNest)))
-      return signalPassFailure();
+    // Capture the tiling parameters from the arguments to the function
+    // enclosing this loop nest.
+    if (tileUsingParameters) {
+      SmallVector<Value, 6> tilingParameters;
 
-    // Separate full and partial tiles.
-    if (separate) {
-      auto intraTileLoops =
-          MutableArrayRef<AffineForOp>(tiledNest).drop_front(band.size());
-      separateFullTiles(intraTileLoops);
+      // Check if tiling parameters are present.
+      checkIfParametersArePresent(band);
+
+      // Use function arguments as tile sizes if present.
+      getTilingParameters(band, &tilingParameters);
+    } else {
+      // Set up tile sizes; fill missing tile sizes at the end with default tile
+      // size or tileSize if one was provided.
+      SmallVector<unsigned, 6> tileSizes;
+      getTileSizes(band, &tileSizes);
+      if (llvm::DebugFlag) {
+        auto diag = band[0].emitRemark("using tile sizes [");
+        for (auto tSize : tileSizes)
+          diag << tSize << ' ';
+        diag << "]\n";
+      }
+      SmallVector<AffineForOp, 6> tiledNest;
+      if (failed(tilePerfectlyNested(band, tileSizes, &tiledNest)))
+        return signalPassFailure();
+
+      // Separate full and partial tiles.
+      if (separate) {
+        auto intraTileLoops =
+            MutableArrayRef<AffineForOp>(tiledNest).drop_front(band.size());
+        separateFullTiles(intraTileLoops);
+      }
     }
   }
 }
