@@ -98,6 +98,17 @@ tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
                     ArrayRef<unsigned> tileSizes,
                     SmallVectorImpl<AffineForOp> *tiledNest = nullptr);
 
+/// Tiles the specified band of perfectly nested loops, using SSA values as tiling 
+/// parameters creating tile-space loops and intra-tile loops. A band is a contiguous 
+/// set of loops. `tiledNest` when non-null is set to the loops of the tiled nest 
+/// from outermost to innermost. Loops in `input` are erased when the tiling is 
+/// successful.
+LLVM_NODISCARD
+LogicalResult
+parametricallyTilePerfectlyNested(MutableArrayRef<AffineForOp> input,
+                    ArrayRef<Value> tileSizes,
+                    SmallVectorImpl<AffineForOp> *tiledNest = nullptr);
+
 /// Performs loop interchange on 'forOpA' and 'forOpB'. Requires that 'forOpA'
 /// and 'forOpB' are part of a perfectly nested sequence of loops.
 void interchangeLoops(AffineForOp forOpA, AffineForOp forOpB);

@@ -79,6 +79,171 @@ static inline void moveLoopBody(AffineForOp src, AffineForOp dest) {
 
 /// Constructs and sets new loop bounds after tiling for the case of
 /// hyper-rectangular index sets, where the bounds of one dimension do not
+/// depend on other dimensions and tiling parameters are captured from SSA
+/// values. Bounds of each dimension can thus be treated independently,
+/// and deriving the new bounds is much simpler and faster than for the case of
+/// tiling arbitrary polyhedral shapes.
+static void constructParametricallyTiledIndexSetHyperRect(
+    MutableArrayRef<AffineForOp> origLoops,
+    MutableArrayRef<AffineForOp> newLoops, ArrayRef<Value> tileSizes) {
+  assert(!origLoops.empty());
+  assert(origLoops.size() == tileSizes.size());
+
+  OpBuilder b(origLoops[0].getOperation());
+  unsigned width = origLoops.size();
+
+  // Bounds for tile space loops.
+  for (unsigned i = 0; i < width; ++i) {
+    OperandRange newLbOperands = origLoops[i].getLowerBoundOperands();
+
+    // The lower bound for Inter-Tile loops are same as the lower bounds of
+    // original loops.
+    newLoops[i].setLowerBound(newLbOperands, origLoops[i].getLowerBoundMap());
+
+    // The new upper bound map for Inter-Tile loops are now ceildiv(orignal
+    // UpperBound, tiling paramter); where tiling parameter is the respective
+    // tile size for that loop. For e.g. if the original map was ()->(1024), the
+    // new map will be ()[s0]->(ceildiv(1024 % s0)), where s0 is the tiling
+    // parameter. Therefore a new symbol operand is inserted in the map and
+    // the result expression is overwritten.
+
+    // Add dim operands from original upper bound.
+    SmallVector<Value, 4> ubOperands;
+    auto ub = origLoops[i].getUpperBound();
+    ubOperands.reserve(ub.getNumOperands() + 1);
+    auto origUbMap = ub.getMap();
+    for (unsigned j = 0, e = origUbMap.getNumDims(); j < e; ++j)
+      ubOperands.push_back(ub.getOperand(j));
+
+    // Add symbol operands from original upper bound.
+    for (unsigned j = 0, e = origUbMap.getNumSymbols(); j < e; ++j)
+      ubOperands.push_back(ub.getOperand(origUbMap.getNumDims() + j));
+
+    // Add a new symbol operand which is the tile size for this loop.
+    ubOperands.push_back(tileSizes[i]);
+
+    // Get tiling parameter as an affine expression.
+    auto tileParameter = b.getAffineSymbolExpr(origUbMap.getNumSymbols());
+
+    SmallVector<AffineExpr, 4> boundExprs;
+    boundExprs.reserve(origUbMap.getNumResults());
+    int64_t origUpperBound;
+    AffineExpr origUpperBoundExpr;
+
+    // If upper bound for the original loop is constant, Then the constant can
+    // be obtained as an affine expression straight away.
+    if (origLoops[i].hasConstantUpperBound()) {
+      origUpperBound = origLoops[i].getConstantUpperBound();
+
+      // Get original constant upper bound as an affine expression.
+      origUpperBoundExpr = b.getAffineConstantExpr(origUpperBound);
+
+      // Insert the bound as ceildiv(original UpperBound, tilingParameter).
+      boundExprs.push_back(origUpperBoundExpr.ceilDiv(tileParameter));
+    } else {
+      // If upper bound for the original loop is not constant then two cases
+      // are possible. 1.) The result of ubmap has only one result expression.
+      // For e.g.
+      //    affine.for %i = 0 to %ub
+      //
+      // A symbol operand is added which represents the tiling paramater. The
+      // new loop bounds here will be like ()[s0, s1] -> (s0 ceildiv s1), where
+      // 's0' is the original upper bound and 's1' is the tiling parameter. 2.)
+      // When ubMap has more than one result expression.
+      // For e.g.
+      //    #map0 = affine_map<()[s0, s1] -> (s0, s1)
+      //    affine.for %i = 0 to min #map0()[%s0, %s1]
+      //
+      // A symbol operand is added which represents the tiling parameter. The
+      // new loop bounds will be like ()[s0, s1, s2] -> ()[s0 ceildiv s2, s1
+      // ceildiv s2], where s2 is the tiling parameter.
+
+      // Insert the bounds as ceildiv(original UpperBound, tilingParameter).
+      for (auto origUpperBoundExpr : origUbMap.getResults()) {
+        boundExprs.push_back(origUpperBoundExpr.ceilDiv(tileParameter));
+      }
+    }
+
+    auto ubMap =
+        AffineMap::get(origUbMap.getNumDims(), origUbMap.getNumSymbols() + 1,
+                       boundExprs, b.getContext());
+    newLoops[i].setUpperBound(/*operands=*/ubOperands, ubMap);
+
+    newLoops[i].setStep(1);
+  }
+
+  // Bounds for intra-tile loops.
+  for (unsigned i = 0; i < width; ++i) {
+
+    // The lower bound for the intra-tile loop is represented by an affine map
+    // as (%i, %t0)->(%i * %t0). Similarly, the upper bound for the intra-tile
+    // loop is represented by an affine map as (%i, %t0)->(%i * %t0 + %t0),
+    // where %i is loop IV of the corresponding inter-tile loop and %t0 is the
+    // corresponding tiling parameter.
+
+    // Add dim operands from original lower/upper bound.
+    SmallVector<Value, 4> lbOperands, ubOperands;
+    auto lb = origLoops[i].getLowerBound();
+    auto ub = origLoops[i].getUpperBound();
+    lbOperands.reserve(lb.getNumOperands() + 2);
+    ubOperands.reserve(ub.getNumOperands() + 2);
+    auto origLbMap = lb.getMap();
+    auto origUbMap = ub.getMap();
+    for (unsigned j = 0, e = origLbMap.getNumDims(); j < e; ++j)
+      lbOperands.push_back(lb.getOperand(j));
+    for (unsigned j = 0, e = origUbMap.getNumDims(); j < e; ++j)
+      ubOperands.push_back(ub.getOperand(j));
+
+    // Add a new dim operand in lbOperands corresponding to the origLoop IV.
+    lbOperands.push_back(newLoops[i].getInductionVar());
+    ubOperands.push_back(newLoops[i].getInductionVar());
+
+    // Add symbol operands from original upper bound.
+    for (unsigned j = 0, e = origLbMap.getNumSymbols(); j < e; ++j)
+      lbOperands.push_back(lb.getOperand(origLbMap.getNumDims() + j));
+    for (unsigned j = 0, e = origUbMap.getNumSymbols(); j < e; ++j)
+      ubOperands.push_back(ub.getOperand(origUbMap.getNumDims() + j));
+
+    // Add a new symbol operand which is the tile size for this loop.
+    lbOperands.push_back(tileSizes[i]);
+    ubOperands.push_back(tileSizes[i]);
+
+    SmallVector<AffineExpr, 4> lbBoundExprs;
+    SmallVector<AffineExpr, 4> ubBoundExprs;
+    lbBoundExprs.reserve(origLbMap.getNumResults());
+    ubBoundExprs.reserve(origUbMap.getNumResults());
+
+    // Get loop IV as an affine expression.
+    auto loopIvExpr = b.getAffineDimExpr(origLbMap.getNumDims());
+
+    // Get tiling parameter as an affine expression for lb.
+    auto lbTileParameter = b.getAffineSymbolExpr(origLbMap.getNumSymbols());
+    auto ubTileParameter = b.getAffineSymbolExpr(origUbMap.getNumSymbols());
+
+    // Insert lb as inter-tile loop IV * tilingParameter.
+    lbBoundExprs.push_back(loopIvExpr * lbTileParameter);
+
+    // Insert ub as inter-tile loop IV * tilingParameter + tilingParameter.
+    ubBoundExprs.push_back((loopIvExpr * ubTileParameter) + ubTileParameter);
+    ubBoundExprs.append(origUbMap.getResults().begin(),
+                        origUbMap.getResults().end());
+
+    auto lbMap = AffineMap::get(origLbMap.getNumDims() + 1,
+                                origLbMap.getNumSymbols() + 1, lbBoundExprs,
+                                b.getContext());
+    newLoops[i + width].setLowerBound(/*operands=*/lbOperands, lbMap);
+
+    auto ubMap = AffineMap::get(origUbMap.getNumDims() + 1,
+                                origUbMap.getNumSymbols() + 1, ubBoundExprs,
+                                b.getContext());
+    newLoops[i + width].setUpperBound(/*operands=*/ubOperands, ubMap);
+
+    newLoops[i + width].setStep(1);
+  }
+}
+
+/// Constructs and sets new loop bounds after tiling for the case of
+/// hyper-rectangular index sets, where the bounds of one dimension do not
 /// depend on other dimensions. Bounds of each dimension can thus be treated
 /// independently, and deriving the new bounds is much simpler and faster
 /// than for the case of tiling arbitrary polyhedral shapes.
@@ -96,8 +261,6 @@ constructTiledIndexSetHyperRect(MutableArrayRef<AffineForOp> origLoops,
   for (unsigned i = 0; i < width; i++) {
     OperandRange newLbOperands = origLoops[i].getLowerBoundOperands();
     OperandRange newUbOperands = origLoops[i].getUpperBoundOperands();
-    ///\\\ Possible changes here. The bounds for the new loops does not have
-    // to be the same in parametric tiling because of semi-affine maps.
     newLoops[i].setLowerBound(newLbOperands, origLoops[i].getLowerBoundMap());
     newLoops[i].setUpperBound(newUbOperands, origLoops[i].getUpperBoundMap());
     newLoops[i].setStep(tileSizes[i]);
@@ -170,8 +333,7 @@ constructTiledIndexSetHyperRect(MutableArrayRef<AffineForOp> origLoops,
 /// function will return failure when any dependence component is negative along
 /// any of `origLoops`.
 static LogicalResult
-checkTilingLegality(MutableArrayRef<mlir::AffineForOp> origLoops,
-                    ArrayRef<unsigned> tileSizes) {
+checkTilingLegality(MutableArrayRef<mlir::AffineForOp> origLoops) {
   assert(!origLoops.empty() && "no original loops provided");
 
   // We first find out all dependences we intend to check.
@@ -229,13 +391,14 @@ checkTilingLegality(MutableArrayRef<mlir::AffineForOp> origLoops,
 
   return success();
 }
+
 /// Tiles the specified band of perfectly nested loops creating tile-space loops
-/// and intra-tile loops. A band is a contiguous set of loops.
-//  TODO: handle non hyper-rectangular spaces.
-LogicalResult
-mlir::tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
-                          ArrayRef<unsigned> tileSizes,
-                          SmallVectorImpl<AffineForOp> *tiledNest) {
+/// and intra-tile loops, using SSA values as tiling parameters. A band is a
+/// contiguous set of loops.
+// TODO: Check if this function can be templatized.
+LogicalResult mlir::parametricallyTilePerfectlyNested(
+    MutableArrayRef<AffineForOp> input, ArrayRef<Value> tileSizes,
+    SmallVectorImpl<AffineForOp> *tiledNest) {
   // Check if the supplied for op's are all successively nested.
   assert(!input.empty() && "no loops in input band");
   assert(input.size() == tileSizes.size() && "Too few/many tile sizes");
@@ -245,7 +408,7 @@ mlir::tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
   auto origLoops = input;
 
   // Perform tiling legality test.
-  if (failed(checkTilingLegality(origLoops, tileSizes)))
+  if (failed(checkTilingLegality(origLoops)))
     origLoops[0].emitRemark("tiled code is illegal due to dependences");
 
   AffineForOp rootAffineForOp = origLoops[0];
@@ -297,7 +460,96 @@ mlir::tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
   for (AffineForOp forOp : input)
     ops.push_back(forOp);
   getIndexSet(ops, &cst);
-  cst.dump();
+  if (!cst.isHyperRectangular(0, width)) {
+    rootAffineForOp.emitError("tiled code generation unimplemented for the "
+                              "non-hyperrectangular case");
+    return failure();
+  }
+
+  constructParametricallyTiledIndexSetHyperRect(origLoops, tiledLoops,
+                                                tileSizes);
+
+  // Replace original IVs with intra-tile loop IVs.
+  for (unsigned i = 0; i < width; i++)
+    origLoopIVs[i].replaceAllUsesWith(tiledLoops[i + width].getInductionVar());
+
+  // Erase the old loop nest.
+  rootAffineForOp.erase();
+
+  if (tiledNest)
+    *tiledNest = std::move(tiledLoops);
+
+  return success();
+}
+
+/// Tiles the specified band of perfectly nested loops creating tile-space loops
+/// and intra-tile loops. A band is a contiguous set of loops.
+//  TODO: handle non hyper-rectangular spaces.
+LogicalResult
+mlir::tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
+                          ArrayRef<unsigned> tileSizes,
+                          SmallVectorImpl<AffineForOp> *tiledNest) {
+  // Check if the supplied for op's are all successively nested.
+  assert(!input.empty() && "no loops in input band");
+  assert(input.size() == tileSizes.size() && "Too few/many tile sizes");
+
+  assert(isPerfectlyNested(input) && "input loops not perfectly nested");
+
+  auto origLoops = input;
+
+  // Perform tiling legality test.
+  if (failed(checkTilingLegality(origLoops)))
+    origLoops[0].emitRemark("tiled code is illegal due to dependences");
+
+  AffineForOp rootAffineForOp = origLoops[0];
+  auto loc = rootAffineForOp.getLoc();
+  // Note that width is at least one since band isn't empty.
+  unsigned width = input.size();
+
+  SmallVector<AffineForOp, 6> tiledLoops(2 * width);
+
+  // The outermost among the loops as we add more..
+  auto *topLoop = rootAffineForOp.getOperation();
+  AffineForOp innermostPointLoop;
+
+  // Add intra-tile (or point) loops.
+  for (unsigned i = 0; i < width; i++) {
+    OpBuilder b(topLoop);
+    // Loop bounds will be set later.
+    auto pointLoop = b.create<AffineForOp>(loc, 0, 0);
+    pointLoop.getBody()->getOperations().splice(
+        pointLoop.getBody()->begin(), topLoop->getBlock()->getOperations(),
+        topLoop);
+    tiledLoops[2 * width - 1 - i] = pointLoop;
+    topLoop = pointLoop.getOperation();
+    if (i == 0)
+      innermostPointLoop = pointLoop;
+  }
+
+  // Add tile space loops;
+  for (unsigned i = width; i < 2 * width; i++) {
+    OpBuilder b(topLoop);
+    // Loop bounds will be set later.
+    auto tileSpaceLoop = b.create<AffineForOp>(loc, 0, 0);
+    tileSpaceLoop.getBody()->getOperations().splice(
+        tileSpaceLoop.getBody()->begin(), topLoop->getBlock()->getOperations(),
+        topLoop);
+    tiledLoops[2 * width - i - 1] = tileSpaceLoop;
+    topLoop = tileSpaceLoop.getOperation();
+  }
+
+  // Move the loop body of the original nest to the new one.
+  moveLoopBody(origLoops.back(), innermostPointLoop);
+
+  SmallVector<Value, 8> origLoopIVs;
+  extractForInductionVars(input, &origLoopIVs);
+
+  FlatAffineConstraints cst;
+  SmallVector<Operation *, 8> ops;
+  ops.reserve(input.size());
+  for (AffineForOp forOp : input)
+    ops.push_back(forOp);
+  getIndexSet(ops, &cst);
   if (!cst.isHyperRectangular(0, width)) {
     rootAffineForOp.emitError("tiled code generation unimplemented for the "
                               "non-hyperrectangular case");
@@ -358,35 +610,40 @@ static void adjustToDivisorsOfTripCounts(ArrayRef<AffineForOp> band,
   }
 }
 
-// Checks if the function enclosing the loop nest has any arguments passed to
-// it. They will be ultimately used as tiling parameters.
-static void checkIfParametersArePresent(ArrayRef<AffineForOp> band) {
+/// Checks if the function enclosing the loop nest has any arguments passed to
+/// it, which can be used as tiling parameters. Assumes that atleast 'n'
+/// arguments are passed, where 'n' is the number of loops in the loop nest.
+static void checkIfTilingParametersArePresent(ArrayRef<AffineForOp> band) {
   assert(!band.empty() && "no loops in input band");
   AffineForOp topLoop = band[0];
 
-  if (auto funcOp = dyn_cast<FuncOp>(topLoop.getParentOp())) {
-    assert(funcOp.getNumArguments() == band.size() &&
-           "Too few/many tile sizes");
-    return;
-  }
+  if (auto funcOp = dyn_cast<FuncOp>(topLoop.getParentOp()))
+    assert(funcOp.getNumArguments() >= band.size() && "Too few tile sizes");
 }
 
-// Captures tiling parameters, which are expected to be passed as arguments to
-// the function enclosing the loop nest.
+/// Captures tiling parameters, which are expected to be passed as arguments to
+/// the function enclosing the loop nest. Also checks if the required parameters
+/// are of index type.
 static void getTilingParameters(ArrayRef<AffineForOp> band,
                                 SmallVectorImpl<Value> *tilingParameters) {
   AffineForOp topLoop = band[0];
   auto funcOpRegion = topLoop.getParentRegion();
 
-  for (auto blockArgument : funcOpRegion->getArguments()) {
-    tilingParameters->push_back(blockArgument);
+  auto nestDepth = band.size();
+
+  for (auto blockArgument :
+       funcOpRegion->getArguments().take_front(nestDepth)) {
+    if (blockArgument.getArgNumber() < nestDepth) {
+      assert(blockArgument.getType().isIndex() &&
+             "expected tiling parameters to be of index type.");
+      tilingParameters->push_back(blockArgument);
+    }
   }
 }
-
-// Returns tile sizes to use. Checks CL options; if none are specified, sets it
-// based on a simple model that looks at the memory footprint and determines
-// tile sizes assuming identity accesses / 1:1 tile size proportional footprint
-// along each of the dimensions being tiled.
+// Returns tile sizes to use. Checks CL options; if none are specified, sets
+// it based on a simple model that looks at the memory footprint and
+// determines tile sizes assuming identity accesses / 1:1 tile size
+// proportional footprint along each of the dimensions being tiled.
 // TODO: evolve this model. Tile size determination is a large area
 // to play with in general.
 void LoopTiling::getTileSizes(ArrayRef<AffineForOp> band,
@@ -441,8 +698,8 @@ void LoopTiling::getTileSizes(ArrayRef<AffineForOp> band,
   // Divide all loops equally in an attempt to reduce footprint.
   // TODO: this is approximate. Ideally, obtain reuse factor /
   // profitability along each dimension and weight tile sizes based on that as
-  // one possible approach. Or compute a polynomial in tile sizes and solve for
-  // it.
+  // one possible approach. Or compute a polynomial in tile sizes and solve
+  // for it.
 
   // For an n-d tileable band, compute the n^th root of the excess.
   unsigned tSize =
@@ -471,17 +728,21 @@ void LoopTiling::runOnFunction() {
   for (auto &band : bands) {
     // Capture the tiling parameters from the arguments to the function
     // enclosing this loop nest.
+    SmallVector<AffineForOp, 6> tiledNest;
     if (tileUsingParameters) {
       SmallVector<Value, 6> tilingParameters;
-
       // Check if tiling parameters are present.
-      checkIfParametersArePresent(band);
+      checkIfTilingParametersArePresent(band);
 
-      // Use function arguments as tile sizes if present.
+      // Get function arguments as tiling parameters.
       getTilingParameters(band, &tilingParameters);
+
+      if (failed(parametricallyTilePerfectlyNested(band, tilingParameters,
+                                                   &tiledNest)))
+        return signalPassFailure();
     } else {
-      // Set up tile sizes; fill missing tile sizes at the end with default tile
-      // size or tileSize if one was provided.
+      // Set up tile sizes; fill missing tile sizes at the end with default
+      // tile size or tileSize if one was provided.
       SmallVector<unsigned, 6> tileSizes;
       getTileSizes(band, &tileSizes);
       if (llvm::DebugFlag) {
@@ -490,7 +751,6 @@ void LoopTiling::runOnFunction() {
           diag << tSize << ' ';
         diag << "]\n";
       }
-      SmallVector<AffineForOp, 6> tiledNest;
       if (failed(tilePerfectlyNested(band, tileSizes, &tiledNest)))
         return signalPassFailure();
 
