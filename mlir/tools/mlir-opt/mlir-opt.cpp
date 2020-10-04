@@ -55,6 +55,7 @@ void registerTestDialect(DialectRegistry &);
 void registerTestDynamicPipelinePass();
 void registerTestExpandTanhPass();
 void registerTestFunc();
+void registerTestGpuFastBufferPlacementPass();
 void registerTestGpuMemoryPromotionPass();
 void registerTestGpuParallelLoopMappingPass();
 void registerTestInterfaces();
@@ -113,6 +114,7 @@ void registerTestPasses() {
   registerTestDynamicPipelinePass();
   registerTestFunc();
   registerTestExpandTanhPass();
+  registerTestGpuFastBufferPlacementPass();
   registerTestGpuMemoryPromotionPass();
   registerTestInterfaces();
   registerTestLinalgFusionTransforms();

@@ -138,10 +138,18 @@ static void mapParallelOp(ParallelOp parallelOp,
   setMappingAttr(parallelOp, attrs);
   ++mappingLevel;
   // Parallel loop operations are immediately nested, so do not use
-  // walk but just iterate over the operations.
+  // walk but just iterate over the operations. Continue even if a for op is
+  // found.
   for (Operation &op : *parallelOp.getBody()) {
     if (ParallelOp nested = dyn_cast<ParallelOp>(op))
       mapParallelOp(nested, mappingLevel);
+    else if (ForOp forOp = dyn_cast<ForOp>(op)) {
+      // Find a ParallelOp in the body of forOp and start mapping from it.
+      for (Operation &op : *forOp.getBody()) {
+        if (ParallelOp nested = dyn_cast<ParallelOp>(op))
+          mapParallelOp(nested, mappingLevel);
+      }
+    }
   }
 }
 

@@ -15,6 +15,7 @@
 #ifndef MLIR_TRANSFORMS_LOOP_UTILS_H
 #define MLIR_TRANSFORMS_LOOP_UTILS_H
 
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Block.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
@@ -177,6 +178,24 @@ struct AffineCopyOptions {
   unsigned tagMemorySpace;
   // Capacity of the fast memory space in bytes.
   uint64_t fastMemCapacityBytes;
+  // Fast buffer data layout remap (for pointwise copying only, i.e., with
+  // generateDma = false). If specified, indices are remapped using it to
+  // generate new indices, effectively enforcing a new layout; row major
+  // layout is unsed if left unspecified.
+  AffineMap fastBufferLayout = AffineMap();
+  // CopyIn placement block.
+  Block::iterator copyInPlacementStart = Block::iterator();
+  // CopyOut placement block.
+  Block::iterator copyOutPlacementStart = Block::iterator();
+  // Copy placement block.
+  Block *copyPlacementBlock = nullptr;
+  // Fast buffer placement block.
+  Block *fastBufferPlacementBlock = nullptr;
+  // True if allocOp for the fast memroy buffer is to be placed just inside the
+  // thred block mapped parallel loops.
+  bool placeInsideTbLoops = false;
+  // True if allocation is on heap.
+  bool isHeapAllocation = true;
 };
 
 /// Performs explicit copying for the contiguous sequence of operations in the

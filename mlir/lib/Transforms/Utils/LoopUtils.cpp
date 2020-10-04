@@ -2318,6 +2318,9 @@ static LogicalResult generateCopy(
 
   unsigned rank = memRefType.getRank();
   SmallVector<int64_t, 4> fastBufferShape;
+  AffineMap fastBufferLayout = copyOptions.fastBufferLayout
+                                   ? copyOptions.fastBufferLayout
+                                   : b.getMultiDimIdentityMap(rank);
 
   // Compute the extents of the buffer.
   std::vector<SmallVector<int64_t, 4>> lbs;
@@ -2396,14 +2399,29 @@ static LogicalResult generateCopy(
   // Check if a buffer was already created.
   bool existingBuf = fastBufferMap.count(memref) > 0;
   if (!existingBuf) {
-    AffineMap fastBufferLayout = b.getMultiDimIdentityMap(rank);
     auto fastMemRefType =
         MemRefType::get(fastBufferShape, memRefType.getElementType(),
                         fastBufferLayout, copyOptions.fastMemorySpace);
 
     // Create the fast memory space buffer just before the 'affine.for'
     // operation.
-    fastMemRef = prologue.create<AllocOp>(loc, fastMemRefType).getResult();
+    if (copyOptions.fastBufferPlacementBlock) {
+      // Special Builder to create fast memory buffers.
+      OpBuilder fastBuffBuilder(copyOptions.fastBufferPlacementBlock,
+                                copyOptions.fastBufferPlacementBlock->begin());
+      if (copyOptions.isHeapAllocation)
+        fastMemRef =
+            fastBuffBuilder.create<AllocOp>(loc, fastMemRefType).getResult();
+      else
+        fastMemRef =
+            fastBuffBuilder.create<AllocaOp>(loc, fastMemRefType).getResult();
+    } else {
+      if (copyOptions.isHeapAllocation)
+        fastMemRef = prologue.create<AllocOp>(loc, fastMemRefType).getResult();
+      else
+        fastMemRef = prologue.create<AllocaOp>(loc, fastMemRefType).getResult();
+    }
+
     // Record it.
     fastBufferMap[memref] = fastMemRef;
     // fastMemRefType is a constant shaped memref.
@@ -2509,7 +2527,7 @@ static LogicalResult generateCopy(
   }
 
   // Generate dealloc for the buffer.
-  if (!existingBuf) {
+  if (!existingBuf && copyOptions.isHeapAllocation) {
     auto bufDeallocOp = epilogue.create<DeallocOp>(loc, fastMemRef);
     // When generating pointwise copies, `nEnd' has to be set to deallocOp on
     // the fast buffer (since it marks the new end insertion point).
@@ -2754,9 +2772,15 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
           // 'affine.for's.
           Block::iterator copyInPlacementStart, copyOutPlacementStart;
           Block *copyPlacementBlock;
-          findHighestBlockForPlacement(
-              *regionEntry.second, *block, begin, end, &copyPlacementBlock,
-              &copyInPlacementStart, &copyOutPlacementStart);
+          if (copyOptions.fastBufferPlacementBlock == nullptr) {
+            findHighestBlockForPlacement(
+                *regionEntry.second, *block, begin, end, &copyPlacementBlock,
+                &copyInPlacementStart, &copyOutPlacementStart);
+          } else {
+            copyInPlacementStart = copyOptions.copyInPlacementStart;
+            copyOutPlacementStart = copyOptions.copyOutPlacementStart;
+            copyPlacementBlock = copyOptions.copyPlacementBlock;
+          }
 
           uint64_t sizeInBytes;
           Block::iterator nBegin, nEnd;
