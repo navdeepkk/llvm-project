@@ -291,6 +291,79 @@ struct ParallelToGpuLaunchLowering : public OpRewritePattern<ParallelOp> {
 };
 } // namespace
 
+/// Checks if the loop bounds are dependent on the loop IV of an outer loop
+/// which has laready been mapped to a H/W ID.
+static bool getGpuMappedDefiningOp(Value &toFind, gpu::LaunchOp &launchOp,
+                                   llvm::DenseMap<Value, bool> &mappedloopIVs,
+                                   Value *mappedLoopIv = nullptr) {
+  // llvm::outs()<<"checking value: ";toFind.getLoc().dump();llvm::outs()<<"\n";
+
+  // If the value is defined outside the gpu.launch then return false.
+  if (toFind.getParentRegion()->isAncestor(launchOp.getParentRegion()))
+    return false;
+
+  //// Check If the definingOp is a constant, if yes then just return.
+  // if (isa_and_nonnull<ConstantOp>(toFind.getDefiningOp()))
+  //  return false;
+
+  // Check if `toFind` is mapped to a H/W ID.
+  if (mappedloopIVs.find(toFind) != mappedloopIVs.end()) {
+    // llvm::outs() << "found the gpu mapped op.\n";
+    if (mappedLoopIv) {
+      *mappedLoopIv = toFind;
+      // llvm::outs()<<"mapping loop iv ";toFind.dump();llvm::outs()<<"\n";
+    }
+    return true;
+  }
+
+  bool isMapped = false;
+  if (!toFind.getParentRegion()->isAncestor(launchOp.getParentRegion())) {
+    // Try to find if the op is mapped to the GPU H/W ID recursively.
+    for (Value operand : toFind.getDefiningOp()->getOperands()) {
+      isMapped |= getGpuMappedDefiningOp(operand, launchOp, mappedloopIVs,
+                                         mappedLoopIv);
+    }
+  }
+
+  // llvm::outs()<<"gpumapped returning returnign\n"<<isMapped<<"\n";
+  return isMapped;
+}
+
+/// Tries to create a series of Operations which approximate the upper bound of
+/// of a loop that has original upper bound dependent on a loop IV which has
+/// been mapped to a GPU H/W ID. Currently, just use the step of the mapped loop
+/// and create a constantOp which can be used as the number of iterations.
+static void
+approximateIterations(Value &loopBoundIV, Value &step, gpu::LaunchOp &launchOp,
+                      llvm::DenseMap<Value, bool> &mappedloopIVs,
+                      SmallVectorImpl<ParallelOp> &mappedParallelLoops,
+                      PatternRewriter &rewriter, Value &launchBound) {
+  //llvm::outs()<<"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+  //llvm::outs()<<mappedParallelLoops.size()<<"\n";
+  //rewriter.clearInsertionPoint();
+  //rewriter.setInsertionPointTo
+  // Check if the defining op of the upper bound of this loop is a
+  // constantIndexop. Find the loop which has already been mapped
+  // to a GPU H/W ID and has the same loop IV as the one used in
+  // the upper bound.
+  for (ParallelOp parallelOp : mappedParallelLoops) {
+    for (auto loop :
+         llvm::zip(parallelOp.getInductionVars(), parallelOp.step())) {
+      //llvm::outs()<<"comparing ";std::get<0>(loop).dump();
+      //llvm::outs()<<"with ";loopBoundIV.dump();
+      //llvm::outs()<<"comparison result: "<<(std::get<0>(loop) == loopBoundIV)<<"\n";
+      if (isa<ConstantIndexOp>(std::get<1>(loop).getDefiningOp()) &&
+          std::get<0>(loop) == loopBoundIV) {
+        Operation *curLoopStep = rewriter.clone(*(step.getDefiningOp()));
+	launchBound = rewriter.create<SignedDivIOp>(
+            parallelOp.getLoc(), std::get<1>(loop), curLoopStep->getResult(0));
+	launchOp.getParentOfType<FuncOp>().dump();
+	return;
+      }
+    }
+  }
+}
+
 /// Tries to derive a static upper bound from the defining operation of
 /// `upperBound`.
 static Value deriveStaticUpperBound(Value upperBound,
@@ -377,7 +450,9 @@ static unsigned getLaunchOpArgumentNum(gpu::Processor processor) {
 static LogicalResult processParallelLoop(
     ParallelOp parallelOp, gpu::LaunchOp launchOp,
     BlockAndValueMapping &cloningMap, SmallVectorImpl<Operation *> &worklist,
-    DenseMap<gpu::Processor, Value> &bounds, PatternRewriter &rewriter) {
+    DenseMap<gpu::Processor, Value> &bounds,
+    SmallVectorImpl<ParallelOp> &mappedParallelLoops,
+    llvm::DenseMap<Value, bool> &mappedloopIVs, PatternRewriter &rewriter) {
   // TODO: Verify that this is a valid GPU mapping.
   // processor ids: 0-2 block [x/y/z], 3-5 -> thread [x/y/z], 6-> sequential
   ArrayAttr mapping =
@@ -440,45 +515,88 @@ static LogicalResult processParallelLoop(
         // the hardware id is imprecise, wrap the contained code into a
         // conditional. If the lower-bound is constant or defined before the
         // launch, we can use it in the launch bounds. Otherwise fail.
+        // TODO: We dont have to fail in each and every case. The lower bound
+        // can very well be dependent on the outer loop IV. If the outer loop IV
+        // has been already mapped to a GPU H/W ID then it stays constant
+        // in a particular instance of the gpu.launch op, We can use that H/W
+        // ID isntead of jsut failing.
         if (!launchIndependent(lowerBound) &&
-            !isa_and_nonnull<ConstantOp>(lowerBound.getDefiningOp()))
-          return failure();
+            !isa_and_nonnull<ConstantOp>(lowerBound.getDefiningOp())) {
+          // llvm::outs() << "failure 1on\n";//parallelOp.getLoc().dump();
+          if (!getGpuMappedDefiningOp(lowerBound, launchOp, mappedloopIVs)) {
+            // llvm::outs() << "failure 12\n";
+            return failure();
+          }
+        }
         // The step must also be constant or defined outside of the loop nest.
         if (!launchIndependent(step) &&
-            !isa_and_nonnull<ConstantOp>(step.getDefiningOp()))
+            !isa_and_nonnull<ConstantOp>(step.getDefiningOp())) {
           return failure();
+        }
         // If the upper-bound is constant or defined before the launch, we can
         // use it in the launch bounds directly. Otherwise try derive a bound.
+        // The upper bound can also be dependent on an outer loop IV which has
+        // already been mapped to a H/W ID in which case we can also try to
+        // approximate the bound.
         bool boundIsPrecise =
             launchIndependent(upperBound) ||
             isa_and_nonnull<ConstantOp>(upperBound.getDefiningOp());
+        bool toApproximateIterations = false;
         {
           PatternRewriter::InsertionGuard guard(rewriter);
           rewriter.setInsertionPoint(launchOp);
+          Value lowerBoundIV, upperBoundIV;
           if (!boundIsPrecise) {
-            upperBound = deriveStaticUpperBound(upperBound, rewriter);
-            if (!upperBound) {
-              return parallelOp.emitOpError()
-                     << "cannot derive loop-invariant upper bound for number "
-                        "of iterations";
+              upperBound = deriveStaticUpperBound(upperBound, rewriter);
+              if (!upperBound) {
+		if (!getGpuMappedDefiningOp(upperBound, launchOp, mappedloopIVs)) {
+                return parallelOp.emitOpError()
+                       << "cannot derive loop-invariant upper bound for number "
+                          "of iterations";
+              }
+              // llvm::outs()<<"found the thing awesome!\n";
+              if (getGpuMappedDefiningOp(lowerBound, launchOp, mappedloopIVs,
+                                         &lowerBoundIV) &&
+                  getGpuMappedDefiningOp(upperBound, launchOp, mappedloopIVs,
+                                         &upperBoundIV)) {
+                lowerBoundIV.dump();
+                upperBoundIV.dump();
+                if (lowerBoundIV != upperBoundIV)
+                  return failure();
+                else
+                  toApproximateIterations = true;
+              } else
+                return failure();
+            } else {
             }
           }
-          // Compute the number of iterations needed. We compute this as an
-          // affine expression ceilDiv (upperBound - lowerBound) step. We use
-          // affine.apply here so that it composes nicely with the provided map.
-          AffineMap stepMap =
-              AffineMap::get(0, 3,
-                             ((rewriter.getAffineSymbolExpr(0) -
-                               rewriter.getAffineSymbolExpr(1))
-                                  .ceilDiv(rewriter.getAffineSymbolExpr(2))));
-          Value launchBound = rewriter.create<AffineApplyOp>(
-              loc, annotation.bound().getValue().compose(stepMap),
-              ValueRange{
-                  ensureLaunchIndependent(
-                      cloningMap.lookupOrDefault(upperBound)),
-                  ensureLaunchIndependent(
-                      cloningMap.lookupOrDefault(lowerBound)),
-                  ensureLaunchIndependent(cloningMap.lookupOrDefault(step))});
+          Value launchBound;
+          if (toApproximateIterations) {
+            // Try to approximate the number of iterations if the upper and
+            // lower bound is dependent on the same loop IV.
+            // llvm::outs()<<"true\n";
+            approximateIterations(upperBoundIV, step, launchOp, mappedloopIVs,
+                                  mappedParallelLoops, rewriter, launchBound);
+            // llvm::outs() << "laucnhboundset\n";
+          } else {
+            // Compute the number of iterations needed. We compute this as an
+            // affine expression ceilDiv (upperBound - lowerBound) step. We use
+            // affine.apply here so that it composes nicely with the provided
+            // map.
+            AffineMap stepMap =
+                AffineMap::get(0, 3,
+                               ((rewriter.getAffineSymbolExpr(0) -
+                                 rewriter.getAffineSymbolExpr(1))
+                                    .ceilDiv(rewriter.getAffineSymbolExpr(2))));
+            launchBound = rewriter.create<AffineApplyOp>(
+                loc, annotation.bound().getValue().compose(stepMap),
+                ValueRange{
+                    ensureLaunchIndependent(
+                        cloningMap.lookupOrDefault(upperBound)),
+                    ensureLaunchIndependent(
+                        cloningMap.lookupOrDefault(lowerBound)),
+                    ensureLaunchIndependent(cloningMap.lookupOrDefault(step))});
+          }
           // todo(herhut,ravishankarm): Update the behavior of setMappingAttr
           // when this condition is relaxed.
           if (bounds.find(processor) != bounds.end()) {
@@ -488,7 +606,7 @@ static LogicalResult processParallelLoop(
           }
           bounds[processor] = launchBound;
         }
-        if (!boundIsPrecise) {
+        if (!boundIsPrecise && !toApproximateIterations) {
           // We are using an approximation, create a surrounding conditional.
           Value originalBound = std::get<3>(config);
           CmpIOp pred = rewriter.create<CmpIOp>(
@@ -516,6 +634,8 @@ static LogicalResult processParallelLoop(
       worklist.push_back(launchOp.getOperation());
     }
     cloningMap.map(iv, newIndex);
+    mappedParallelLoops.push_back(parallelOp);
+    mappedloopIVs[iv] = true;
   }
 
   // Propagate custom user defined optional attributes, that can be used at
@@ -528,9 +648,11 @@ static LogicalResult processParallelLoop(
   }
 
   Block *body = parallelOp.getBody();
+  // llvm::outs() << "body size: " << body->getOperations().size() << "\n";
   worklist.reserve(worklist.size() + body->getOperations().size());
   for (Operation &op : llvm::reverse(body->without_terminator()))
     worklist.push_back(&op);
+  // llvm::outs() << "size: " << worklist.size() << "\n";
   return success();
 }
 
@@ -578,10 +700,13 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
   rewriter.setInsertionPointToStart(&launchOp.body().front());
 
   BlockAndValueMapping cloningMap;
+  SmallVector<ParallelOp, 6> mappedParallelLoops;
+  llvm::DenseMap<Value, bool> mappedloopIVs;
   llvm::DenseMap<gpu::Processor, Value> launchBounds;
   SmallVector<Operation *, 16> worklist;
   if (failed(processParallelLoop(parallelOp, launchOp, cloningMap, worklist,
-                                 launchBounds, rewriter)))
+                                 launchBounds, mappedParallelLoops,
+                                 mappedloopIVs, rewriter)))
     return failure();
 
   // Whether we have seen any side-effects. Reset when leaving an inner scope.
@@ -603,8 +728,9 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
       // A nested scf.parallel needs insertion of code to compute indices.
       // Insert that now. This will also update the worklist with the loops
       // body.
-      if (failed(processParallelLoop(nestedParallel, launchOp, cloningMap,
-                                     worklist, launchBounds, rewriter)))
+      if (failed(processParallelLoop(
+              nestedParallel, launchOp, cloningMap, worklist, launchBounds,
+              mappedParallelLoops, mappedloopIVs, rewriter)))
         return failure();
     } else if (op == launchOp.getOperation()) {
       // Found our sentinel value. We have finished the operations from one
@@ -614,13 +740,32 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
       leftNestingScope = true;
       seenSideeffects = false;
     } else {
+      // There may be a parallel op inside this for. Find the parallel op
+      // and process it.
+      if (ForOp forOp = dyn_cast<ForOp>(op)) {
+        Block *body = forOp.getBody();
+        for (Operation &op : body->without_terminator()) {
+          if (ParallelOp parallelOp = dyn_cast<ParallelOp>(op)) {
+            // llvm::outs() << "found a nested parallel op\n";
+            if (failed(processParallelLoop(
+                    parallelOp, launchOp, cloningMap, worklist, launchBounds,
+                    mappedParallelLoops, mappedloopIVs, rewriter)))
+              return failure();
+          }
+        }
+      }
       // Otherwise we copy it over.
       Operation *clone = rewriter.clone(*op, cloningMap);
       cloningMap.map(op->getResults(), clone->getResults());
       // Check for side effects.
       // TODO: Handle region side effects properly.
+      // clone->getLoc().dump();
+      // llvm::outs() << "has noeffect: "
+      //             << MemoryEffectOpInterface::hasNoEffect(clone) << "\n";
+      // llvm::outs() << "leftNestingScope: " << leftNestingScope << "\n";
       seenSideeffects |= !MemoryEffectOpInterface::hasNoEffect(clone) ||
                          clone->getNumRegions() != 0;
+      // llvm::outs() << "seenSideeffects: " << seenSideeffects << "\n";
       // If we are no longer in the innermost scope, sideeffects are disallowed.
       if (seenSideeffects && leftNestingScope)
         return failure();

@@ -58,8 +58,6 @@ LogicalResult createAndPlaceFastBuffers(AffineForOp rootForOp,
     lhsMemRef = loadOp.getMemRef();
   });
 
-  Value lhsBuf, rhsL3Buf, rhsL1Buf;
-
   // Allocate fast memory buffers.
   AffineCopyOptions copyOptions = {/*generateDma=*/false,
                                    /*slowMemorySpace=*/0,
@@ -78,8 +76,8 @@ LogicalResult createAndPlaceFastBuffers(AffineForOp rootForOp,
                          std::prev(loopNest[2].getBody()->end()), copyOptions,
                          lhsMemRef, copyNests);
 
-  affineDataCopyGenerate(loopNest[2].getBody()->begin(),
-                         std::prev(loopNest[2].getBody()->end()), copyOptions,
+  affineDataCopyGenerate(loopNest[3].getBody()->begin(),
+                         std::prev(loopNest[3].getBody()->end()), copyOptions,
                          rhsMemRef, copyNests);
 
   for (Operation *copyNest : copyNests) {
