@@ -200,7 +200,7 @@ gpu.module @kernel {
   // NVVM-LABEL: llvm.func @multiple
   // ROCDL-LABEL: llvm.func @multiple
   gpu.func @multiple(%arg0: f32)
-      workgroup(%arg1: memref<1xf32, 3>, %arg2: memref<2xf32, 3>)
+      workgroup(%arg1: memref<1xf32, 3>, %arg2: memref<3x2xf32, 3>)
       private(%arg3: memref<3xf32, 5>, %arg4: memref<4xf32, 5>) {
 
     // Workgroup buffers.
@@ -223,7 +223,7 @@ gpu.module @kernel {
 
     %c0 = constant 0 : index
     store %arg0, %arg1[%c0] : memref<1xf32, 3>
-    store %arg0, %arg2[%c0] : memref<2xf32, 3>
+    store %arg0, %arg2[%c0, %c0] : memref<3x2xf32, 3>
     store %arg0, %arg3[%c0] : memref<3xf32, 5>
     store %arg0, %arg4[%c0] : memref<4xf32, 5>
     "terminator"() : () -> ()

@@ -296,8 +296,6 @@ struct ParallelToGpuLaunchLowering : public OpRewritePattern<ParallelOp> {
 static bool getGpuMappedDefiningOp(Value &toFind, gpu::LaunchOp &launchOp,
                                    llvm::DenseMap<Value, bool> &mappedloopIVs,
                                    Value *mappedLoopIv = nullptr) {
-  // llvm::outs()<<"checking value: ";toFind.getLoc().dump();llvm::outs()<<"\n";
-
   // If the value is defined outside the gpu.launch then return false.
   if (toFind.getParentRegion()->isAncestor(launchOp.getParentRegion()))
     return false;
@@ -308,11 +306,9 @@ static bool getGpuMappedDefiningOp(Value &toFind, gpu::LaunchOp &launchOp,
 
   // Check if `toFind` is mapped to a H/W ID.
   if (mappedloopIVs.find(toFind) != mappedloopIVs.end()) {
-    // llvm::outs() << "found the gpu mapped op.\n";
-    if (mappedLoopIv) {
+    if (mappedLoopIv) 
       *mappedLoopIv = toFind;
-      // llvm::outs()<<"mapping loop iv ";toFind.dump();llvm::outs()<<"\n";
-    }
+    
     return true;
   }
 
@@ -325,7 +321,6 @@ static bool getGpuMappedDefiningOp(Value &toFind, gpu::LaunchOp &launchOp,
     }
   }
 
-  // llvm::outs()<<"gpumapped returning returnign\n"<<isMapped<<"\n";
   return isMapped;
 }
 
@@ -337,11 +332,7 @@ static void
 approximateIterations(Value &loopBoundIV, Value &step, gpu::LaunchOp &launchOp,
                       llvm::DenseMap<Value, bool> &mappedloopIVs,
                       SmallVectorImpl<ParallelOp> &mappedParallelLoops,
-                      PatternRewriter &rewriter, Value &launchBound) {
-  //llvm::outs()<<"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
-  //llvm::outs()<<mappedParallelLoops.size()<<"\n";
-  //rewriter.clearInsertionPoint();
-  //rewriter.setInsertionPointTo
+                      PatternRewriter &rewriter, Value &launchBound, Value & outerloopStep) {
   // Check if the defining op of the upper bound of this loop is a
   // constantIndexop. Find the loop which has already been mapped
   // to a GPU H/W ID and has the same loop IV as the one used in
@@ -349,15 +340,12 @@ approximateIterations(Value &loopBoundIV, Value &step, gpu::LaunchOp &launchOp,
   for (ParallelOp parallelOp : mappedParallelLoops) {
     for (auto loop :
          llvm::zip(parallelOp.getInductionVars(), parallelOp.step())) {
-      //llvm::outs()<<"comparing ";std::get<0>(loop).dump();
-      //llvm::outs()<<"with ";loopBoundIV.dump();
-      //llvm::outs()<<"comparison result: "<<(std::get<0>(loop) == loopBoundIV)<<"\n";
       if (isa<ConstantIndexOp>(std::get<1>(loop).getDefiningOp()) &&
           std::get<0>(loop) == loopBoundIV) {
+	outerloopStep = std::get<1>(loop).getDefiningOp()->getResult(0);
         Operation *curLoopStep = rewriter.clone(*(step.getDefiningOp()));
 	launchBound = rewriter.create<SignedDivIOp>(
             parallelOp.getLoc(), std::get<1>(loop), curLoopStep->getResult(0));
-	launchOp.getParentOfType<FuncOp>().dump();
 	return;
       }
     }
@@ -452,7 +440,7 @@ static LogicalResult processParallelLoop(
     BlockAndValueMapping &cloningMap, SmallVectorImpl<Operation *> &worklist,
     DenseMap<gpu::Processor, Value> &bounds,
     SmallVectorImpl<ParallelOp> &mappedParallelLoops,
-    llvm::DenseMap<Value, bool> &mappedloopIVs, PatternRewriter &rewriter) {
+    llvm::DenseMap<Value, bool> &mappedloopIVs, llvm::DenseMap<Value, Value> &loopIVtoIter, PatternRewriter &rewriter) {
   // TODO: Verify that this is a valid GPU mapping.
   // processor ids: 0-2 block [x/y/z], 3-5 -> thread [x/y/z], 6-> sequential
   ArrayAttr mapping =
@@ -491,20 +479,6 @@ static LogicalResult processParallelLoop(
     gpu::Processor processor = gpu::getProcessor(annotation);
 
     if (isMappedToProcessor(processor)) {
-      // Use the corresponding thread/grid index as replacement for the loop iv.
-      Value operand =
-          launchOp.body().getArgument(getLaunchOpArgumentNum(processor));
-      // Take the indexmap and add the lower bound and step computations in.
-      // This computes operand * step + lowerBound.
-      // Use an affine map here so that it composes nicely with the provided
-      // annotation.
-      AffineMap lowerAndStep = AffineMap::get(
-          1, 2,
-          rewriter.getAffineDimExpr(0) * rewriter.getAffineSymbolExpr(0) +
-              rewriter.getAffineSymbolExpr(1));
-      newIndex = rewriter.create<AffineApplyOp>(
-          loc, annotation.map().getValue().compose(lowerAndStep),
-          ValueRange{operand, step, lowerBound});
       // If there was also a bound, insert that, too.
       // TODO: Check that we do not assign bounds twice.
       if (annotation.bound().getValue()) {
@@ -522,9 +496,7 @@ static LogicalResult processParallelLoop(
         // ID isntead of jsut failing.
         if (!launchIndependent(lowerBound) &&
             !isa_and_nonnull<ConstantOp>(lowerBound.getDefiningOp())) {
-          // llvm::outs() << "failure 1on\n";//parallelOp.getLoc().dump();
           if (!getGpuMappedDefiningOp(lowerBound, launchOp, mappedloopIVs)) {
-            // llvm::outs() << "failure 12\n";
             return failure();
           }
         }
@@ -547,37 +519,55 @@ static LogicalResult processParallelLoop(
           rewriter.setInsertionPoint(launchOp);
           Value lowerBoundIV, upperBoundIV;
           if (!boundIsPrecise) {
-              upperBound = deriveStaticUpperBound(upperBound, rewriter);
-              if (!upperBound) {
-		if (!getGpuMappedDefiningOp(upperBound, launchOp, mappedloopIVs)) {
-                return parallelOp.emitOpError()
-                       << "cannot derive loop-invariant upper bound for number "
-                          "of iterations";
-              }
-              // llvm::outs()<<"found the thing awesome!\n";
+            // Check if upper bound can be obtianed.
+	    Value tempUpperBound = deriveStaticUpperBound(upperBound, rewriter);
+            if (!tempUpperBound) {
+              // If upper bound is not statically obtainable check if both the
+              // upper and lower bound are outer loopIV dependent.
               if (getGpuMappedDefiningOp(lowerBound, launchOp, mappedloopIVs,
                                          &lowerBoundIV) &&
                   getGpuMappedDefiningOp(upperBound, launchOp, mappedloopIVs,
                                          &upperBoundIV)) {
-                lowerBoundIV.dump();
-                upperBoundIV.dump();
                 if (lowerBoundIV != upperBoundIV)
+                  // If both are outer loopIV dependent but are not dependent
+                  // on the saame loopIV then abort.
                   return failure();
                 else
                   toApproximateIterations = true;
               } else
+                // If both are not dependent on the outer loopIV then abort.
                 return failure();
-            } else {
             }
+          } else {
+            // Check for the case when uppper bound is aproximated but the lower
+            // bound is dependent on the outer loopIV. abort in this case.
+            if (getGpuMappedDefiningOp(lowerBound, launchOp, mappedloopIVs))
+              return failure();
           }
           Value launchBound;
           if (toApproximateIterations) {
+	    Value outerloopStep;
             // Try to approximate the number of iterations if the upper and
             // lower bound is dependent on the same loop IV.
-            // llvm::outs()<<"true\n";
             approximateIterations(upperBoundIV, step, launchOp, mappedloopIVs,
-                                  mappedParallelLoops, rewriter, launchBound);
-            // llvm::outs() << "laucnhboundset\n";
+                                  mappedParallelLoops, rewriter, launchBound, outerloopStep);
+        
+      // Use the corresponding thread/grid index as replacement for the loop iv.
+      //if(loopIVtoIter.find(lowerBoundIV) == loopIVtoIter.end())
+      //  return failure();
+      //Value operand =
+      //    launchOp.body().getArgument(getLaunchOpArgumentNum(processor));
+      //// Take the indexmap and add the lower bound and step computations in.
+      //// This computes operand * step + OuterLoopIv * outerLoopStep.
+      //// Use an affine map here so that it composes nicely with the provided
+      //// annotation.
+      //AffineMap lowerAndStep = AffineMap::get(
+      //    1, 3,
+      //    rewriter.getAffineDimExpr(0) * rewriter.getAffineSymbolExpr(0) +
+      //        (rewriter.getAffineSymbolExpr(1)) * rewriter.getAffineSymbolExpr(2));
+      //newIndex = rewriter.create<AffineApplyOp>(
+      //    loc, annotation.map().getValue().compose(lowerAndStep),
+      //    ValueRange{operand, step, loopIVtoIter[lowerBoundIV], outerloopStep});
           } else {
             // Compute the number of iterations needed. We compute this as an
             // affine expression ceilDiv (upperBound - lowerBound) step. We use
@@ -596,6 +586,20 @@ static LogicalResult processParallelLoop(
                     ensureLaunchIndependent(
                         cloningMap.lookupOrDefault(lowerBound)),
                     ensureLaunchIndependent(cloningMap.lookupOrDefault(step))});
+      // Use the corresponding thread/grid index as replacement for the loop iv.
+      Value operand =
+          launchOp.body().getArgument(getLaunchOpArgumentNum(processor));
+      // Take the indexmap and add the lower bound and step computations in.
+      // This computes operand * step + lowerBound.
+      // Use an affine map here so that it composes nicely with the provided
+      // annotation.
+      AffineMap lowerAndStep = AffineMap::get(
+          1, 2,
+          rewriter.getAffineDimExpr(0) * rewriter.getAffineSymbolExpr(0) +
+              rewriter.getAffineSymbolExpr(1));
+      newIndex = rewriter.create<AffineApplyOp>(
+          loc, annotation.map().getValue().compose(lowerAndStep),
+          ValueRange{operand, step, lowerBound});
           }
           // todo(herhut,ravishankarm): Update the behavior of setMappingAttr
           // when this condition is relaxed.
@@ -634,6 +638,7 @@ static LogicalResult processParallelLoop(
       worklist.push_back(launchOp.getOperation());
     }
     cloningMap.map(iv, newIndex);
+    loopIVtoIter[iv] = newIndex;
     mappedParallelLoops.push_back(parallelOp);
     mappedloopIVs[iv] = true;
   }
@@ -648,11 +653,9 @@ static LogicalResult processParallelLoop(
   }
 
   Block *body = parallelOp.getBody();
-  // llvm::outs() << "body size: " << body->getOperations().size() << "\n";
   worklist.reserve(worklist.size() + body->getOperations().size());
   for (Operation &op : llvm::reverse(body->without_terminator()))
     worklist.push_back(&op);
-  // llvm::outs() << "size: " << worklist.size() << "\n";
   return success();
 }
 
@@ -703,10 +706,11 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
   SmallVector<ParallelOp, 6> mappedParallelLoops;
   llvm::DenseMap<Value, bool> mappedloopIVs;
   llvm::DenseMap<gpu::Processor, Value> launchBounds;
+  llvm::DenseMap<Value, Value> loopIVtoIter;
   SmallVector<Operation *, 16> worklist;
   if (failed(processParallelLoop(parallelOp, launchOp, cloningMap, worklist,
                                  launchBounds, mappedParallelLoops,
-                                 mappedloopIVs, rewriter)))
+                                 mappedloopIVs, loopIVtoIter, rewriter)))
     return failure();
 
   // Whether we have seen any side-effects. Reset when leaving an inner scope.
@@ -730,7 +734,7 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
       // body.
       if (failed(processParallelLoop(
               nestedParallel, launchOp, cloningMap, worklist, launchBounds,
-              mappedParallelLoops, mappedloopIVs, rewriter)))
+              mappedParallelLoops, mappedloopIVs, loopIVtoIter,rewriter)))
         return failure();
     } else if (op == launchOp.getOperation()) {
       // Found our sentinel value. We have finished the operations from one
@@ -740,16 +744,15 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
       leftNestingScope = true;
       seenSideeffects = false;
     } else {
+      if (ForOp forOp = dyn_cast<ForOp>(op)) {
       // There may be a parallel op inside this for. Find the parallel op
       // and process it.
-      if (ForOp forOp = dyn_cast<ForOp>(op)) {
         Block *body = forOp.getBody();
         for (Operation &op : body->without_terminator()) {
-          if (ParallelOp parallelOp = dyn_cast<ParallelOp>(op)) {
-            // llvm::outs() << "found a nested parallel op\n";
+          if (ParallelOp nestedParallelOp = dyn_cast<ParallelOp>(op)) {
             if (failed(processParallelLoop(
-                    parallelOp, launchOp, cloningMap, worklist, launchBounds,
-                    mappedParallelLoops, mappedloopIVs, rewriter)))
+                    nestedParallelOp, launchOp, cloningMap, worklist, launchBounds,
+                    mappedParallelLoops, mappedloopIVs, loopIVtoIter, rewriter)))
               return failure();
           }
         }
@@ -759,13 +762,8 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
       cloningMap.map(op->getResults(), clone->getResults());
       // Check for side effects.
       // TODO: Handle region side effects properly.
-      // clone->getLoc().dump();
-      // llvm::outs() << "has noeffect: "
-      //             << MemoryEffectOpInterface::hasNoEffect(clone) << "\n";
-      // llvm::outs() << "leftNestingScope: " << leftNestingScope << "\n";
       seenSideeffects |= !MemoryEffectOpInterface::hasNoEffect(clone) ||
                          clone->getNumRegions() != 0;
-      // llvm::outs() << "seenSideeffects: " << seenSideeffects << "\n";
       // If we are no longer in the innermost scope, sideeffects are disallowed.
       if (seenSideeffects && leftNestingScope)
         return failure();
@@ -777,8 +775,8 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
   for (auto bound : launchBounds)
     launchOp.setOperand(getLaunchOpArgumentNum(std::get<0>(bound)),
                         std::get<1>(bound));
-
   rewriter.eraseOp(parallelOp);
+  launchOp.getParentOfType<FuncOp>().dump();
   return success();
 }
 
