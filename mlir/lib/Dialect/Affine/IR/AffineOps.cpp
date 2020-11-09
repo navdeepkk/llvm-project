@@ -253,6 +253,10 @@ static Region *getAffineScope(Operation *op) {
 // *) It is valid as a symbol.
 // *) It is an induction variable.
 // *) It is the result of affine apply operation with dimension id arguments.
+// *) It is the result of affine min operation with dimension id arguments.
+// *) It is the result of affine max operation with dimension id arguments.
+// The last two conditions are applicable only if the value is being used as an
+// operand of an AffineParallelOp.
 bool mlir::isValidDim(Value value) {
   // The value must be an index type.
   if (!value.getType().isIndex())
@@ -273,6 +277,10 @@ bool mlir::isValidDim(Value value) {
 // *) It is valid as a symbol.
 // *) It is an induction variable.
 // *) It is the result of an affine apply operation with dimension id operands.
+// *) It is the result of an affine min operation with dimension id arguments.
+// *) It is the result of an affine max operation with dimension id arguments.
+// The last two conditions are applicable only if the value is being used as
+// an an operand of AffineParallelOp.
 bool mlir::isValidDim(Value value, Region *region) {
   // The value must be an index type.
   if (!value.getType().isIndex())
@@ -297,6 +305,26 @@ bool mlir::isValidDim(Value value, Region *region) {
   // level.
   if (auto dimOp = dyn_cast<DimOp>(op))
     return isTopLevelValue(dimOp.memrefOrTensor());
+  // Since AffineParallelOp doesn't support min/max of values as its operands,
+  // we hoist min/max as AffineMin/MaxOp and use its results as an operand of
+  // an AffineParallelOp. The flag `isAffineParallelOperand` specifies that the
+  // `value` is an operand of an AffineParallelOp and hence even if it's a
+  // result of AffineMin/MaxOp it can be used as a valid dimension id.
+  bool isAffineParallelOperand = false;
+  for (auto *op : value.getUsers())
+    if (isa<AffineParallelOp>(op)) {
+      isAffineParallelOperand = true;
+      break;
+    }
+
+  if (isAffineParallelOperand) {
+    // AffineMinOp is ok if all of its operands are ok.
+    if (auto minOp = dyn_cast<AffineMinOp>(op))
+      return minOp.isValidDim(region);
+    // AffineMaxOp is ok if if all of its operands are ok.
+    if (auto maxOp = dyn_cast<AffineMaxOp>(op))
+      return maxOp.isValidDim(region);
+  }
   return false;
 }
 
@@ -348,6 +376,10 @@ static bool isDimOpValidSymbol(DimOp dimOp, Region *region) {
 // *) It is the result of an affine.apply operation with symbol operands.
 // *) It is a result of the dim op on a memref whose corresponding size is a
 //    valid symbol.
+// *) It is the result of an affine min operation with symbol arguments.
+// *) It is the result of an affine max operation with symbol arguments.
+// The last two conditions are applicable only if the value is being used as an
+// operand of an AffineParallelOp.
 bool mlir::isValidSymbol(Value value) {
   // The value must be an index type.
   if (!value.getType().isIndex())
@@ -371,9 +403,13 @@ bool mlir::isValidSymbol(Value value) {
 ///    a valid symbol.
 /// *) It is defined at the top level of 'region' or is its argument.
 /// *) It dominates `region`'s parent op.
-/// If `region` is null, conservatively assume the symbol definition scope does
-/// not exist and only accept the values that would be symbols regardless of
-/// the surrounding region structure, i.e. the first three cases above.
+/// *) It is the result of an affine min operation with symbol arguments.
+/// *) It is the result of an affine max operation with symbol arguments.
+/// The last two conditions are applicable only if the value is being used as
+/// an operand of an AffineParallelOp. If `region` is null, conservatively
+/// assume the symbol definition scope does not exist and only accept the
+/// values that would be symbols regardless of the surrounding region structure,
+/// i.e. the first three cases above.
 bool mlir::isValidSymbol(Value value, Region *region) {
   // The value must be an index type.
   if (!value.getType().isIndex())
@@ -406,6 +442,27 @@ bool mlir::isValidSymbol(Value value, Region *region) {
   // Dim op results could be valid symbols at any level.
   if (auto dimOp = dyn_cast<DimOp>(defOp))
     return isDimOpValidSymbol(dimOp, region);
+
+  // Since AffineParallelOp doesn't support min/max of values as its operands,
+  // we hoist min/max as AffineMin/MaxOp and use its results as an operand of
+  // an AffineParallelOp. The flag `isAffineParallelOperand` specifies that
+  // the `value` is an operand of an AffineParallelOp and hence even if it's
+  // a result of AffineMin/MaxOp it can be used as a valid symbol.
+  bool isAffineParallelOperand = false;
+  for (auto *op : value.getUsers())
+    if (isa<AffineParallelOp>(op)) {
+      isAffineParallelOperand = true;
+      break;
+    }
+
+  if (isAffineParallelOperand) {
+    // Affine min operation is ok if all of its operands are ok.
+    if (auto minOp = dyn_cast<AffineMinOp>(defOp))
+      return minOp.isValidSymbol(region);
+    // Affine max operation is ok if if all of its operands are ok.
+    if (auto maxOp = dyn_cast<AffineMaxOp>(defOp))
+      return maxOp.isValidSymbol(region);
+  }
 
   // Check for values dominating `region`'s parent op.
   Operation *regionOp = region ? region->getParentOp() : nullptr;
@@ -2341,6 +2398,36 @@ void AffineMinOp::getCanonicalizationPatterns(
   patterns.insert<SimplifyAffineOp<AffineMinOp>>(context);
 }
 
+// The result of the affine min operation can be used as a dimensional operand
+// of an affine.parallel op if all its operands are valid dimension ids.
+bool AffineMinOp::isValidDim() {
+  return llvm::all_of(getOperands(),
+                      [](Value op) { return mlir::isValidDim(op); });
+}
+
+// The result of the affine min operation can be used as a dimensional operand
+// of an affine.parallel op if all its operands are valid dimension ids with
+// the parent operation of `region` defining the polyhedral scope for symbols.
+bool AffineMinOp::isValidDim(Region *region) {
+  return llvm::all_of(getOperands(),
+                      [&](Value op) { return ::isValidDim(op, region); });
+}
+
+// The result of the affine min operation can be used as a symbol operand of an
+// affine.parallel op if all its operands are symbols.
+bool AffineMinOp::isValidSymbol() {
+  return llvm::all_of(getOperands(),
+                      [](Value op) { return mlir::isValidSymbol(op); });
+}
+
+// The result of the affine min operation can be used as a symbol operand of an
+// affine.parallel op in `region` if all its operands are symbols in `region`.
+bool AffineMinOp::isValidSymbol(Region *region) {
+  return llvm::all_of(getOperands(), [&](Value operand) {
+    return mlir::isValidSymbol(operand, region);
+  });
+}
+
 //===----------------------------------------------------------------------===//
 // AffineMaxOp
 //===----------------------------------------------------------------------===//
@@ -2355,6 +2442,36 @@ OpFoldResult AffineMaxOp::fold(ArrayRef<Attribute> operands) {
 void AffineMaxOp::getCanonicalizationPatterns(
     OwningRewritePatternList &patterns, MLIRContext *context) {
   patterns.insert<SimplifyAffineOp<AffineMaxOp>>(context);
+}
+
+// The result of the affine max operation can be used as a dimensional operand
+// of an affine.parallel op if all its operands are valid dimension ids.
+bool AffineMaxOp::isValidDim() {
+  return llvm::all_of(getOperands(),
+                      [](Value op) { return mlir::isValidDim(op); });
+}
+
+// The result of the affine max operation can be used as a dimensional operand
+// of an affine.parallel op if all its operands are valid dimension ids with
+// the parent operation of `region` defining the polyhedral scope for symbols.
+bool AffineMaxOp::isValidDim(Region *region) {
+  return llvm::all_of(getOperands(),
+                      [&](Value op) { return ::isValidDim(op, region); });
+}
+
+// The result of the affine max operation can be used as a symbol operand of an
+// affine.parallel op if all its operands are symbols.
+bool AffineMaxOp::isValidSymbol() {
+  return llvm::all_of(getOperands(),
+                      [](Value op) { return mlir::isValidSymbol(op); });
+}
+
+// The result of the affine max operation can be used as a symbol operand of an
+// affine.parallel op in `region` if all its operands are symbols in `region`.
+bool AffineMaxOp::isValidSymbol(Region *region) {
+  return llvm::all_of(getOperands(), [&](Value operand) {
+    return mlir::isValidSymbol(operand, region);
+  });
 }
 
 //===----------------------------------------------------------------------===//

@@ -544,6 +544,22 @@ class AffineMinMaxOpBase<string mnemonic, list<OpTrait> traits = []> :
       return OperandRange{operands().begin() + map().getNumDims(),
                         operands().end()};
     }
+
+    /// Returns true if the result of this operation can be used as dimension id
+    /// in the region of the closest surrounding op with trait AffineScope.
+    bool isValidDim();
+
+    /// Returns true if the result of this operation can be used as dimension id
+    /// within 'region', i.e., for all its uses with `region`.
+    bool isValidDim(Region *region);
+
+    /// Returns true if the result of this operation is a symbol in the region
+    /// of the closest surrounding op that has the trait AffineScope.
+    bool isValidSymbol();
+
+    /// Returns true if the result of this operation is a symbol for all its
+    /// uses in `region`.
+    bool isValidSymbol(Region *region);
   }];
   let verifier = [{ return ::verifyAffineMinMaxOp(*this); }];
   let printer = [{ return ::printAffineMinMaxOp(p, *this); }];

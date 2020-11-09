@@ -234,3 +234,50 @@ func @affine_for_multiple_yield(%buffer: memref<1024xf32>) -> (f32, f32) {
 // CHECK-NEXT:   %[[res2:.*]] = addf %{{.*}}, %[[iter_arg2]] : f32
 // CHECK-NEXT:   affine.yield %[[res1]], %[[res2]] : f32, f32
 // CHECK-NEXT: }
+
+// -----
+
+// Here the results of affine min/max are used as an operand of affine parallel op
+// which is valid and IR is parsed successfully without any error.
+
+#map0 = affine_map<(d0)[s0] -> (d0 + 2, s0)>
+#map1 = affine_map<(d0) -> (d0)>
+#map2 = affine_map<(d0)[s0] -> (d0 + 6, s0)>
+#map3 = affine_map<(d0)[s0] -> (d0 - 4, s0)>
+
+func @valid_dim_sym_affine_parallel() {
+  %0 = alloc() : memref<1024x1024xf32>
+  %1 = alloc() : memref<1024x1024xf32>
+  %2 = alloc() : memref<1024x1024xf32>
+  %c0 = constant 0 : index
+  %c1 = constant 1 : index
+  %3 = dim %0, %c0 : memref<1024x1024xf32>
+  %4 = dim %1, %c1 : memref<1024x1024xf32>
+  %5 = dim %0, %c1 : memref<1024x1024xf32>
+  affine.for %arg0 = 0 to %3 {
+    affine.for %arg1 = 0 to %4 {
+      affine.for %arg2 = 0 to %5 step 6 {
+        %6 = affine.min #map0(%arg0)[%3]
+        %7 = affine.min #map0(%arg1)[%4]
+        %8 = affine.max #map3(%arg0)[%4]
+        affine.parallel (%arg3) = (%arg0) to (%6) {
+          affine.parallel (%arg4) = (%8) to (%7) {
+            affine.for %arg5 = #map1(%arg2) to min #map2(%arg2)[%5] {
+              %9 = affine.load %0[%arg3, %arg5] : memref<1024x1024xf32>
+              %10 = affine.load %1[%arg5, %arg4] : memref<1024x1024xf32>
+              %11 = affine.load %2[%arg3, %arg4] : memref<1024x1024xf32>
+              %12 = mulf %9, %10 : f32
+              %13 = addf %11, %12 : f32
+              affine.store %13, %2[%arg3, %arg4] : memref<1024x1024xf32>
+            }
+          }
+        }
+      }
+    }
+  }
+  return
+}
+
+// CHECK-LABEL: func @valid_dim_sym_affine_parallel
+// CHECK:        affine.parallel (%arg{{.*}}) = (%arg{{.*}}) to (%{{.*}}) {
+// CHECK-NEXT:     affine.parallel (%arg{{.*}}) = (%{{.*}}) to (%{{.*}}) {

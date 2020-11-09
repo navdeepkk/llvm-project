@@ -371,3 +371,46 @@ func @affine_for_iter_args_mismatch(%buffer: memref<1024xf32>) -> f32 {
   }
   return %res : f32
 }
+
+// -----
+
+// Here the results of affine min/max is used as an operand of affine for op
+// which is invalid and it throws an error.
+
+#map4 = affine_map<(d0)[s0] -> (d0 + 2, s0)>
+#map5 = affine_map<(d0)[s0] -> (d0 + 6, s0)>
+#map6 = affine_map<(d0)[s0] -> (d0 - 4, s0)>
+
+func @valid_dim_sym_affine_parallel2() {
+  %0 = alloc() : memref<1024x1024xf32>
+  %1 = alloc() : memref<1024x1024xf32>
+  %2 = alloc() : memref<1024x1024xf32>
+  %c0 = constant 0 : index
+  %c1 = constant 1 : index
+  %3 = dim %0, %c0 : memref<1024x1024xf32>
+  %4 = dim %1, %c1 : memref<1024x1024xf32>
+  %5 = dim %0, %c1 : memref<1024x1024xf32>
+  affine.parallel (%arg0) = (0) to (symbol(%3)) {
+    affine.parallel (%arg1) = (0) to (symbol(%4)) {
+      affine.for %arg2 = 0 to %5 step 6 {
+        %6 = affine.min #map4(%arg0)[%3]
+        %7 = affine.min #map4(%arg1)[%4]
+        %8 = affine.max #map6(%arg0)[%4]
+        affine.parallel (%arg3) = (%arg0) to (%6) {
+          affine.parallel (%arg4) = (%8) to (%7) {
+	    // expected-error@+1 {{op operand cannot be used as a symbol}}
+            affine.for %arg5 = %arg2 to min #map5(%arg2)[%6] {
+              %9 = affine.load %0[%arg3, %arg5] : memref<1024x1024xf32>
+              %10 = affine.load %1[%arg5, %arg4] : memref<1024x1024xf32>
+              %11 = affine.load %2[%arg3, %arg4] : memref<1024x1024xf32>
+              %12 = mulf %9, %10 : f32
+              %13 = addf %11, %12 : f32
+              affine.store %13, %2[%arg3, %arg4] : memref<1024x1024xf32>
+            }
+          }
+        }
+      }
+    }
+  }
+  return
+}
