@@ -25,6 +25,7 @@ struct ParallelLoopCollapsing
     Operation *module = getOperation();
 
     module->walk([&](scf::ParallelOp op) {
+      BoolAttr isCopyLoop = op.getAttrOfType<BoolAttr>("isCopyLoop"); 
       // The common case for GPU dialect will be simplifying the ParallelOp to 3
       // arguments, so we do that here to simplify things.
       llvm::SmallVector<std::vector<unsigned>, 3> combinedLoops;
@@ -34,7 +35,15 @@ struct ParallelLoopCollapsing
         combinedLoops.push_back(clCollapsedIndices1);
       if (clCollapsedIndices2.size())
         combinedLoops.push_back(clCollapsedIndices2);
-      collapseParallelLoops(op, combinedLoops);
+      
+      if(processCopyLoops){
+        // Process only if copyloops attribute is present.
+        if(isCopyLoop){
+          collapseParallelLoops(op, combinedLoops);  
+        }
+      }else{
+	collapseParallelLoops(op, combinedLoops);
+      }
     });
   }
 };

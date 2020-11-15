@@ -430,6 +430,8 @@ def ParallelLoopCollapsing : Pass<"parallel-loop-collapsing"> {
   let summary = "Collapse parallel loops to use less induction variables";
   let constructor = "mlir::createParallelLoopCollapsingPass()";
   let options = [
+    Option<"processCopyLoops", "process-copy-loops", "bool", /*default=*/"false",
+           "If true, only collapse parallel ops with copy loops annotation.">,
     ListOption<"clCollapsedIndices0", "collapsed-indices-0", "unsigned",
                "Which loop indices to combine 0th loop index",
                "llvm::cl::MiscFlags::CommaSeparated">,

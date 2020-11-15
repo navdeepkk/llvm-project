@@ -70,6 +70,7 @@ void registerTestLoopUnrollingPass();
 void registerTestMatchers();
 void registerTestMemRefDependenceCheck();
 void registerTestMemRefStrideCalculation();
+void registerTestLoopNormalizationPass();
 void registerTestOpaqueLoc();
 void registerTestPreparationPassWithAllowedMemrefResults();
 void registerTestPrintDefUsePass();
@@ -127,6 +128,7 @@ void registerTestPasses() {
   registerTestMatchers();
   registerTestMemRefDependenceCheck();
   registerTestMemRefStrideCalculation();
+  registerTestLoopNormalizationPass();
   registerTestOpaqueLoc();
   registerTestPreparationPassWithAllowedMemrefResults();
   registerTestPrintDefUsePass();

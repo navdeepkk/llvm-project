@@ -1935,6 +1935,10 @@ static void normalizeLoop(scf::ForOp loop, scf::ForOp outer, scf::ForOp inner) {
   loop.setStep(loopPieces.step);
 }
 
+void mlir::normalizeSingleLoop(scf::ForOp loop, scf::ForOp outer, scf::ForOp inner) {
+  normalizeLoop(loop, outer, inner);
+}
+
 void mlir::coalesceLoops(MutableArrayRef<scf::ForOp> loops) {
   if (loops.size() < 2)
     return;
