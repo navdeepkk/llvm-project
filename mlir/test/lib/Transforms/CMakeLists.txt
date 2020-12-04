@@ -15,6 +15,7 @@ add_mlir_library(MLIRTestTransforms
   TestGpuMemoryPromotion.cpp
   TestGpuParallelLoopMapping.cpp
   TestGpuRewrite.cpp
+  TestCollapseAffineParallel.cpp
   TestInlining.cpp
   TestLinalgCodegenStrategy.cpp
   TestLinalgFusionTransforms.cpp

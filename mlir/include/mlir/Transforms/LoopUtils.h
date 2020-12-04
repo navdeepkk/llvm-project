@@ -22,6 +22,7 @@
 namespace mlir {
 class AffineForOp;
 class AffineMap;
+class AffineParallelOp;
 class FuncOp;
 class LoopLikeOpInterface;
 struct MemRefRegion;
@@ -53,11 +54,13 @@ LogicalResult loopUnrollUpToFactor(AffineForOp forOp, uint64_t unrollFactor);
 bool LLVM_ATTRIBUTE_UNUSED isPerfectlyNested(ArrayRef<AffineForOp> loops);
 
 /// Get perfectly nested sequence of loops starting at root of loop nest
-/// (the first op being another AffineFor, and the second op - a terminator).
-/// A loop is perfectly nested iff: the first op in the loop's body is another
-/// AffineForOp, and the second op is a terminator).
+/// (the first op being another AffineFor/AffineParallel, and the second op - a
+/// terminator). A loop is perfectly nested iff: the first op in the loop's body
+/// is another AffineForOp/AffineParallelOp, and the second op is a terminator).
 void getPerfectlyNestedLoops(SmallVectorImpl<AffineForOp> &nestedLoops,
                              AffineForOp root);
+void getPerfectlyNestedLoops(SmallVectorImpl<AffineParallelOp> &nestedLoops,
+                             AffineParallelOp root);
 void getPerfectlyNestedLoops(SmallVectorImpl<scf::ForOp> &nestedLoops,
                              scf::ForOp root);
 
@@ -307,6 +310,10 @@ separateFullTiles(MutableArrayRef<AffineForOp> nest,
 
 /// Move loop invariant code out of `looplike`.
 LogicalResult moveLoopInvariantCode(LoopLikeOpInterface looplike);
+
+/// Collapses perfectly nested multi-dimensional 'affine.parallel' ops contained
+/// in `func` into a single n-dimensional 'affine.parallel' op.
+void collapseAffineParallelOps(FuncOp func);
 
 } // end namespace mlir
 

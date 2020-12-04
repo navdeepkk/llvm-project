@@ -41,6 +41,7 @@ void registerTestAffineLoopUnswitchingPass();
 void registerTestAllReduceLoweringPass();
 void registerTestFunc();
 void registerTestGpuMemoryPromotionPass();
+void registerTestCollapseAffineParallelPass();
 void registerTestLoopPermutationPass();
 void registerTestMatchers();
 void registerTestPrintDefUsePass();
@@ -113,6 +114,7 @@ void registerTestPasses() {
   registerTestAllReduceLoweringPass();
   registerTestFunc();
   registerTestGpuMemoryPromotionPass();
+  registerTestCollapseAffineParallelPass();
   registerTestLoopPermutationPass();
   registerTestMatchers();
   registerTestPrintDefUsePass();
