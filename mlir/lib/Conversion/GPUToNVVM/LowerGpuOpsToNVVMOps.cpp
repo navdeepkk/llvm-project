@@ -26,6 +26,9 @@
 #include "../GPUCommon/IndexIntrinsicsOpLowering.h"
 #include "../GPUCommon/OpToFuncCallLowering.h"
 #include "../PassDetail.h"
+#include "WmmaLoadOptoNvvmLowering.h"
+#include "WmmaMmaOptoNvvmLowering.h"
+#include "WmmaStoreOptoNvvmLowering.h"
 
 using namespace mlir;
 
@@ -171,6 +174,9 @@ void mlir::populateGpuToNVVMConversionPatterns(
               // attributions since NVVM models it as `alloca`s in the default
               // memory space and does not support `alloca`s with addrspace(5).
               GPUFuncOpLowering<0>>(converter);
+  patterns.insert<WmmaLoadOptoNVVMLowering>(converter);
+  patterns.insert<WmmaMmaOptoNVVMLowering>(converter);
+  patterns.insert<WmmaStoreOptoNVVMLowering>(converter);
   patterns.insert<OpToFuncCallLowering<AbsFOp>>(converter, "__nv_fabsf",
                                                 "__nv_fabs");
   patterns.insert<OpToFuncCallLowering<AtanOp>>(converter, "__nv_atanf",

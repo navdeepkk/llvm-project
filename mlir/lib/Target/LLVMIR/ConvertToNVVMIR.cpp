@@ -35,6 +35,27 @@ static llvm::Value *createIntrinsicCall(llvm::IRBuilder<> &builder,
   return builder.CreateCall(fn, args);
 }
 
+static llvm::Value *createNvvmIntrinsicCall(llvm::IRBuilder<> &builder,
+                                            llvm::Intrinsic::ID intrinsic,
+                                            ArrayRef<llvm::Value *> args = {}) {
+  llvm::Module *module = builder.GetInsertBlock()->getModule();
+  llvm::Function *fn;
+  if (llvm::Intrinsic::isOverloaded(intrinsic)) {
+    if (intrinsic != llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f16_f16) {
+      // NVVM load and store instrinsic names are overloaded on the
+      // source/destination pointer type. Pointer is the first argument in the
+      // corresponding NVVM Op.
+      fn = llvm::Intrinsic::getDeclaration(module, intrinsic,
+                                           {args[0]->getType()});
+    } else {
+      fn = llvm::Intrinsic::getDeclaration(module, intrinsic, {});
+    }
+  } else {
+    fn = llvm::Intrinsic::getDeclaration(module, intrinsic);
+  }
+  return builder.CreateCall(fn, args);
+}
+
 static llvm::Intrinsic::ID getShflBflyIntrinsicId(llvm::Type *resultType,
                                                   bool withPredicate) {
   if (withPredicate) {

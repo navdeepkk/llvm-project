@@ -131,6 +131,99 @@ static LogicalResult verify(MmaOp op) {
   return op.emitOpError("unimplemented mma.sync variant");
 }
 
+static LogicalResult verify(WMMALoadOp op) {
+  MLIRContext *context = op.getContext();
+  auto I32Ty = LLVM::LLVMType::getInt32Ty(context);
+  auto I32Ptr1Ty = LLVM::LLVMPointerType::get(I32Ty, 1);
+  auto I32Ptr3Ty = LLVM::LLVMPointerType::get(I32Ty, 3);
+  auto I32Ptr0Ty = LLVM::LLVMPointerType::get(I32Ty, 0);
+  auto f16Ty = LLVM::LLVMType::getHalfTy(context);
+  auto f16x2Ty = LLVM::LLVMType::getVectorTy(f16Ty, 2);
+  auto f16x2x4StructTy = LLVM::LLVMType::getStructTy(
+      context, {f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty});
+  auto f16x2x8StructTy = LLVM::LLVMType::getStructTy(
+      context,
+      {f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty});
+
+  SmallVector<Type, 2> operand_types(op.getOperandTypes().begin(),
+                                     op.getOperandTypes().end());
+  if (operand_types != SmallVector<Type, 2>{I32Ptr1Ty, I32Ty} &&
+      operand_types != SmallVector<Type, 2>{I32Ptr3Ty, I32Ty} &&
+      operand_types != SmallVector<Type, 2>{I32Ptr0Ty, I32Ty}) {
+    return op.emitOpError("expected operands to be a source pointer in memory "
+	"space 0, 1, 3 followed by ldm of the source");
+  }
+
+  if (op.operand().equals("AOp") || op.operand().equals("BOp")) {
+    if (op.getType() != f16x2x8StructTy) {
+      return op.emitOpError("expected result type of loadAOp and loadBOp to be "
+                            "a struct of 8 <halfx2>s");
+    }
+  } else if (op.operand().equals("COp")) {
+    if (op.getType() != f16x2x4StructTy) {
+      return op.emitOpError(
+          "expected result type of loadCOp to be a struct of 4 <halfx2>s");
+    }
+  }
+
+  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
+    return op.emitError("WMMA shape of 16x16x16 only implemented");
+
+  return success();
+}
+
+static LogicalResult verify(WMMAStoreOp op) {
+  MLIRContext *context = op.getContext();
+  auto I32Ty = LLVM::LLVMType::getInt32Ty(context);
+  auto I32Ptr1Ty = LLVM::LLVMPointerType::get(I32Ty, 1);
+  auto I32Ptr3Ty = LLVM::LLVMPointerType::get(I32Ty, 3);
+  auto I32Ptr0Ty = LLVM::LLVMPointerType::get(I32Ty, 0);
+  auto f16Ty = LLVM::LLVMType::getHalfTy(context);
+  auto f16x2Ty = LLVM::LLVMType::getVectorTy(f16Ty, 2);
+
+  SmallVector<Type, 2> operand_types(op.getOperandTypes().begin(),
+                                     op.getOperandTypes().end());
+  if (operand_types != SmallVector<Type, 5>{I32Ptr1Ty, f16x2Ty, f16x2Ty,
+                                            f16x2Ty, f16x2Ty, I32Ty} &&
+      operand_types != SmallVector<Type, 5>{I32Ptr3Ty, f16x2Ty, f16x2Ty,
+                                            f16x2Ty, f16x2Ty, I32Ty} &&
+      operand_types != SmallVector<Type, 5>{I32Ptr0Ty, f16x2Ty, f16x2Ty,
+                                            f16x2Ty, f16x2Ty, I32Ty}) {
+    return op.emitOpError("expected operands to be a source pointer followed "
+                          "by ldm of the source");
+  }
+
+  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
+    return op.emitError("WMMA shape of 16x16x16 only implemented");
+
+  return success();
+}
+
+static LogicalResult verify(WMMAMmaOp op) {
+  MLIRContext *context = op.getContext();
+  auto f16Ty = LLVM::LLVMType::getHalfTy(context);
+  auto f16x2Ty = LLVM::LLVMType::getVectorTy(f16Ty, 2);
+  auto f16x2x4StructTy = LLVM::LLVMType::getStructTy(
+      context, {f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty});
+
+  SmallVector<Type, 2> operand_types(op.getOperandTypes().begin(),
+                                     op.getOperandTypes().end());
+  if (operand_types != SmallVector<Type, 20>(20, f16x2Ty)) {
+    return op.emitOpError("expected operands to be a source pointer followed "
+                          "by ldm of the source");
+  }
+
+  if (op.getType() != f16x2x4StructTy) {
+    return op.emitOpError(
+        "expected result type of AOp and BOp to be a struct of 8 <halfx2>s");
+  }
+
+  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
+    return op.emitError("WMMA shape of 16x16x16 only implemented");
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // NVVMDialect initialization, type parsing, and registration.
 //===----------------------------------------------------------------------===//

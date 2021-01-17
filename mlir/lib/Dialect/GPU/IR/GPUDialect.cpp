@@ -14,6 +14,7 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Vector/VectorOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -138,7 +139,8 @@ LogicalResult GPUDialect::verifyOperationAttribute(Operation *op,
   return walkResult.wasInterrupted() ? failure() : success();
 }
 
-template <typename T> static LogicalResult verifyIndexOp(T op) {
+template <typename T>
+static LogicalResult verifyIndexOp(T op) {
   auto dimension = op.dimension();
   if (dimension != "x" && dimension != "y" && dimension != "z")
     return op.emitError("dimension \"") << dimension << "\" is invalid";
@@ -883,6 +885,146 @@ static void printAsyncDependencies(OpAsmPrinter &printer, Operation *op,
   printer << "[";
   llvm::interleaveComma(asyncDependencies, printer);
   printer << "]";
+}
+
+//===----------------------------------------------------------------------===//
+// GPU_SubgroupMmaLoadMatrixOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verify(SubgroupMmaLoadMatrixOp op) {
+  auto srcType = op.srcMemref().getType();
+  auto dstType = op.dstMemref().getType();
+  auto srcMemrefType = srcType.cast<MemRefType>();
+  auto dstMemrefType = dstType.cast<MemRefType>();
+  auto srcElemType = srcMemrefType.getElementType();
+  auto dstElemType = dstMemrefType.getElementType();
+  auto srcMemSpace = srcMemrefType.getMemorySpace();
+  auto dstMemSpace = dstMemrefType.getMemorySpace();
+
+  if ((srcMemSpace != 0 && srcMemSpace != 3) || dstMemSpace != 5)
+    return op.emitError("Source memorySpace of `0` or `3` and destination "
+                        "memorySpace of `5` is only allowed");
+
+  if (!srcElemType.isF16())
+    return op.emitOpError("Operands of type F16 only allowed");
+
+  if (auto dstVecTy = dstElemType.dyn_cast<VectorType>()) {
+    if (op.operand().equals("AOp") || op.operand().equals("BOp")) {
+      if (!dstVecTy.getElementType().isF16() || dstVecTy.getRank() != 1 ||
+          dstVecTy.getDimSize(0) != 2 || dstMemrefType.getRank() != 1 ||
+          dstMemrefType.getDimSize(0) != 8)
+        return op.emitError(
+            "Destination for AOp and BOp should be memref<8xvec<2xf16>>");
+    }
+    if (op.operand().equals("COp")) {
+      if (!dstVecTy.getElementType().isF16() || dstVecTy.getRank() != 1 ||
+          dstVecTy.getDimSize(0) != 2 || dstMemrefType.getRank() != 1 ||
+          dstMemrefType.getDimSize(0) != 4)
+        return op.emitError(
+            "Destination for COp should be of shape memref<4xvec<2xf16>>");
+    }
+  } else
+    return op.emitError(
+        "Element type of Destination memref should be of vector type");
+
+  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
+    return op.emitError("WMMA shape of 16x16x16 only implemented");
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// GPU_SubgroupMmaStoreMatrixOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verify(SubgroupMmaStoreMatrixOp op) {
+  auto srcType = op.srcMemref().getType();
+  auto dstType = op.dstMemref().getType();
+  auto srcMemrefType = srcType.cast<MemRefType>();
+  auto dstMemrefType = dstType.cast<MemRefType>();
+  auto srcElemType = srcMemrefType.getElementType();
+  auto dstElemType = dstMemrefType.getElementType();
+  auto srcMemSpace = srcMemrefType.getMemorySpace();
+  auto dstMemSpace = dstMemrefType.getMemorySpace();
+
+  if ((dstMemSpace != 0 && dstMemSpace != 3) || srcMemSpace != 5)
+    return op.emitError("Source memorySpace of `0` or `3` and destination "
+                        "memorySpace of `5` is only allowed");
+
+  if (!dstElemType.isF16())
+    return op.emitOpError("Destination memref of type F16 only allowed");
+
+  if (auto srcVecTy = srcElemType.dyn_cast<VectorType>()) {
+    if (!srcVecTy.getElementType().isF16() || srcVecTy.getRank() != 1 ||
+        srcVecTy.getDimSize(0) != 2 || srcMemrefType.getRank() != 1 ||
+        srcMemrefType.getDimSize(0) != 4)
+      return op.emitError(
+          "Source memref should be of shape memref<4xvec<2xf16>>");
+  } else
+    return op.emitError(
+        "Source memref should be of shape memref<4xvec<2xf16>>");
+
+  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
+    return op.emitError("WMMA shape of 16x16x16 only implemented");
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// GPU_SubgroupMmaComputeOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verify(SubgroupMmaComputeOp op) {
+  enum operandMap { A, B, C, D };
+  SmallVector<MemRefType, 4> opTypes;
+  SmallVector<Type, 4> elemTypes;
+  SmallVector<ArrayRef<int64_t>, 4> opShapes;
+  SmallVector<int64_t, 4> opMemSpace;
+
+  auto populateOpInfo = [&opTypes, &elemTypes, &opShapes, &opMemSpace, &op]() {
+    opTypes.push_back(op.opA().getType().cast<MemRefType>());
+    opTypes.push_back(op.opB().getType().cast<MemRefType>());
+    opTypes.push_back(op.opC().getType().cast<MemRefType>());
+    opTypes.push_back(op.opD().getType().cast<MemRefType>());
+
+    for (MemRefType opType : opTypes) {
+      elemTypes.push_back(opType.getElementType());
+      opShapes.push_back(opType.getShape());
+      opMemSpace.push_back(opType.getMemorySpace());
+    }
+  };
+  populateOpInfo();
+
+  if (opMemSpace[A] != 5 || opMemSpace[B] != 5 || opMemSpace[C] != 5 ||
+      opMemSpace[D] != 5)
+    return op.emitError("All operand should be in MemSpace 5");
+
+  auto verifyElems = [](Type &elemType, MemRefType &memrefType,
+                        unsigned numElems) {
+    if (auto srcVecTy = elemType.dyn_cast<VectorType>()) {
+      if (!srcVecTy.getElementType().isF16() || srcVecTy.getRank() != 1 ||
+          srcVecTy.getDimSize(0) != 2 || memrefType.getRank() != 1 ||
+          memrefType.getDimSize(0) != numElems) {
+        return false;
+      } else {
+        return true;
+      }
+    } else
+      return false;
+  };
+
+  if (!verifyElems(elemTypes[A], opTypes[A], 8) ||
+      !verifyElems(elemTypes[B], opTypes[B], 8) ||
+      !verifyElems(elemTypes[C], opTypes[C], 4) ||
+      !verifyElems(elemTypes[D], opTypes[D], 4))
+    return op.emitError(
+        "A and B must be of type memref<8xvector<2xf16>>, C and "
+        "D must of type memref<4xvector<2xf16>>");
+
+  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
+    return op.emitError("WMMA shape of 16x16x16 only implemented");
+
+  return success();
 }
 
 #include "mlir/Dialect/GPU/GPUOpInterfaces.cpp.inc"

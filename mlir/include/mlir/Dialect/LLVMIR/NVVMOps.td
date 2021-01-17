@@ -16,6 +16,7 @@
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
+include "mlir/Dialect/GPU/GPUBase.td"
 //===----------------------------------------------------------------------===//
 // NVVM dialect definitions
 //===----------------------------------------------------------------------===//
@@ -141,6 +142,148 @@ def NVVM_MmaOp :
         builder, llvm::Intrinsic::nvvm_mma_m8n8k4_row_col_f32_f32, $args);
   }];
   let assemblyFormat = "$args attr-dict `:` functional-type($args, $res)";
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def NVVM_WMMALoadOp :
+  NVVM_Op<"wmma.load">,
+  Results<(outs LLVM_AnyStruct:$res)>,
+  Arguments<(ins Variadic<LLVM_Type>:$args,
+            UI16Attr:$wm,
+            UI16Attr:$wn,
+            UI16Attr:$wk,
+            I64Attr:$ldm,
+            SubgroupMmaOperand:$operand)> {
+  string llvmBuilder = [{
+    if($operand.compare("AOp") == 0)
+      $res = createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_load_a_f16_row_stride, $args);
+
+    else if($operand.compare("BOp") == 0)
+      $res = createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_load_b_f16_row_stride, $args);
+
+    else if($operand.compare("COp") == 0)
+      $res = createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_load_c_f16_row_stride, $args);
+  }];
+ 
+  let summary = "Warp synchronous matrix load";
+
+  let description = [{ 
+    The `nvvm.wmma.load` operation loads a matrix collectively using all the threads
+    in a warp.
+
+    The operation takes two arguments, the address from where the matrix elements are
+    to be loaded from and a stride. The stride argument represents the leading dimension
+    of the source matrix. The address and the stride are required to be the same across
+    all threads in the warp. The Shape and type of the matrix being loaded are specified
+    using the attribiutes `wm`, `wn`, `wk` and `operand`. Each thread in a warp holds a
+    certain number of elements. The Op returns a LLVM struct which holds the elements of
+    the matrix held by this thread.
+
+    This op is meant to be used along with `nvvm.wmma.store` and `nvvm.wmma.mma`.
+
+    Example:
+    
+    ```mlir
+    %2 = nvvm.wmma.load %0, %1 {ldm = 32 : i64, operand = "AOp", wk = 16 :
+    ui16, wm = 16 : ui16, wn = 16 : ui16} : !llvm.ptr<i32, 3>, !llvm.i32 ->
+    !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>,
+    vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>
+    ```
+  }];
+  
+  let assemblyFormat = "$args attr-dict `:` type($args) `->` type($res)";
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def NVVM_WMMAStoreOp :
+  NVVM_Op<"wmma.store">,
+  Arguments<(ins Variadic<LLVM_Type>:$args,
+            UI16Attr:$wm,
+            UI16Attr:$wn,
+            UI16Attr:$wk,
+            I64Attr:$ldm)> {
+  string llvmBuilder = [{
+        createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_store_d_f16_row_stride, $args);
+  }];
+
+  let summary = "Warp synchronous matrix store";
+  
+  let description = [{ 
+    The `nvvm.wmma.store` operation stores a matrix collectively using all the threads
+    in a warp.
+
+    The operation takes as arguments the address to where the matrix elements are
+    to be stored, a stride and the elements to store, held by the current thread.
+    The stride argument represents the leading dimension of the destination matrix.
+    The address and the stride are required to be the same across all threads in the
+    warp. The Shape of the matrix being stored are specified using the attribiutes
+    `wm`, `wn`, `wk`.
+
+    This op is meant to be used along with `nvvm.wmma.load` and `nvvm.wmma.mma`.
+
+    Example:
+    
+    ```mlir
+    nvvm.wmma.store %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10{ldm = 32 : i64,
+    , wk = 16 : ui16, wm = 16 : ui16, wn = 16 : ui16} : !llvm.ptr<i32, 3>
+    !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>,
+    vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>, !llvm.i32
+    ```
+  }];
+  
+  let assemblyFormat = "$args attr-dict `:` type($args)";
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def NVVM_WMMAMmaOp :
+  NVVM_Op<"wmma.mma">,
+  Results<(outs LLVM_AnyStruct:$res)>,
+  Arguments<(ins Variadic<LLVM_Type>:$args,
+            UI16Attr:$wm,
+            UI16Attr:$wn,
+            UI16Attr:$wk)> {
+  string llvmBuilder = [{
+    $res = createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f16_f16, $args);
+  }];
+
+  let summary = "Warp synchronous matrix-multiply accumulate using tensor cores.";
+
+  let description = [{ 
+    The `nvvm.wmma.stores` operation performs a matrix-multiply accumulate(mma)
+    operation using all the threads in a warp.
+
+    The operation performed is represented as `D = A * B + C`. The operation takes
+    as arguments the elements of the matrices `A`, `B`, `C` and `D`, held by the
+    current thread. The Shape of the overall operation is represented using the
+    attribiutes `wm`, `wn`, `wk`. The op returns a LLVM struct which holds a part
+    of the result held by the current thread. 
+
+    This op is meant to be used along with `nvvm.wmma.load` and `nvvm.wmma.store`.
+
+    Example:
+    
+    ```mlir
+    %20 = nvvm.wmma.mma %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10, %11, %12,
+    %13, %14, %15, %16, %17, %18, %19 {wk = 16 : ui16, wm = 16 : ui16, wn = 16 :
+    ui16} : !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
+    !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
+    !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
+    !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
+    !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
+    !llvm.vec<2 x half> -> !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>,
+    vec<2 x half>)>
+    ```
+  }];
+  
+  let assemblyFormat = "$args attr-dict `:` type($args) `->` type($res)";
+
   let verifier = [{ return ::verify(*this); }];
 }
 

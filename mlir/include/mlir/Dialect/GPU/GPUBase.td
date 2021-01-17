@@ -102,4 +102,34 @@ def GPU_AsyncOpInterface : OpInterface<"AsyncOpInterface"> {
   ];
 }
 
+// Cases of the String enum Attribute for SubgroupMmaOpLayout, representing
+// the layouts of the operands supported by the ops that use this attribute.
+def RowMajor: StrEnumAttrCase<"RowMajor", 0>;
+def ColMajor: StrEnumAttrCase<"ColMajor", 1>;
+
+// Specifies a String enum Attribute for Warp wide matrix operations, 
+// representing the layout of respective operands GPU Dialect. The layout
+// later governs the lowerings to appropriate intrinsics.
+def SubgroupMmaOpLayout: StrEnumAttr<"Layout", "Specifies wether op is row/col major",
+                           [RowMajor, ColMajor]> {
+  let stringToSymbolFnName = "LayoutStrToEnum";
+  let symbolToStringFnName = "EnumToLayoutStr";
+}
+
+// Cases of the String enum Attribute for SubgroupMmaOperand, representing
+// the operand tags supported by the ops that use this attribute.
+def DOp: StrEnumAttrCase<"DOp", 0>;
+def Aop: StrEnumAttrCase<"AOp", 1>;
+def Bop: StrEnumAttrCase<"BOp", 2>;
+def Cop: StrEnumAttrCase<"COp", 3>;
+
+// Specifies a String enum Attribute for Warp wide matrix operations,
+// representing the operands for the operations. The operands later
+// govern the lowerings to appropriate intrinsics.
+def SubgroupMmaOperand: StrEnumAttr<"WmmaOp", "Specifes which subgroup operand is this",
+                           [DOp, Aop, Bop, Cop]> {
+  let stringToSymbolFnName = "OpStrToEnum";
+  let symbolToStringFnName = "EnumToOpStr";
+}
+
 #endif // GPU_BASE

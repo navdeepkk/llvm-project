@@ -914,4 +914,138 @@ def GPU_MemcpyOp : GPU_Op<"memcpy", [
   let verifier = [{ return ::verify(*this); }];
 }
 
+def GPU_SubgroupMmaLoadMatrixOp : GPU_Op<"subgroup_mma_load_matrix",
+    [MemoryEffects<[MemRead, MemWrite]>]>{
+
+  let summary = "GPU warp synchronous matrix load";
+
+  let description = [{
+    The `gpu.subgroup_mma_load_matrix` operation loads a matrix collectively
+    using all the threads in a subgroup.
+
+    This operation takes two memrefs as arguments. One is the source matrix
+    from which data is to be loaded and the other is the destination. The
+    source memref can be in the global or shared memory space. The destination
+    matrix is required to be in the thread private memory space. The srcOffsetI
+    and srcOffsetJ attributes denote the coordinates of the first element starting
+    from which the matrix is to be loaded. `wm`, `wn`, `wk` attributes represent
+    the shape of the overall matrix operation. The size of the matrix being loaded
+    depends on the `operand` attribute. `ldm` attribute specifies the leading
+    dimension of the source matrix.
+
+    This op is meant to be used along with `gpu.subgroup_mma_store_matrix` and
+    `gpu.subgroup_mma_compute`.
+
+    Example:
+
+    ```mlir
+    gpu.subgroup_mma_load_matrix %src, %dst : {operand = "AOp", srcOffsetJ = 16
+    : index, srcOffsetI = 16 : index, ldm = 32 : ui16, wk = 16 : ui16, wm = 16
+    : ui16, wn = 16 : ui16} : memref<32x32xf16, 3>, memref<8xvector<2xf16>, 5>
+    ```
+  }];
+
+  let arguments = (ins Arg<AnyMemRef, "", [MemRead]>:$srcMemref,
+                  Arg<AnyMemRef, "",[MemWrite]>:$dstMemref,
+                  I64Attr:$srcOffsetI,
+                  I64Attr:$srcOffsetJ,
+                  UI16Attr:$wm,
+                  UI16Attr:$wn,
+                  UI16Attr:$wk,
+                  I64Attr:$ldm,
+                  SubgroupMmaOperand:$operand);
+
+  let assemblyFormat = [{
+    $srcMemref`,` $dstMemref attr-dict `:` type($srcMemref)`,` type($dstMemref)
+  }];
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def GPU_SubgroupMmaStoreMatrixOp : GPU_Op<"subgroup_mma_store_matrix", [MemoryEffects<[MemRead, MemWrite]>]>{
+ 
+  let summary = "GPU warp synchronous matrix store";
+
+  let description = [{
+    The `gpu.subgroup_mma_store_matrix` operation loads a matrix collectively
+    using all the threads in a subgroup.
+
+    This operation takes two memrefs as arguments. One is the source matrix which
+    contains the data to be stored and the other is the destination. The source
+    memref required to be in the thread private memory space. The destination
+    can be in the global or shared memory space. The srcOffsetI and srcOffsetJ
+    attributes denote the coordinates of the first element in the destination
+    matrix to where this matrix is to be stored. `wm`, `wn`, `wk` attributes
+    represent the shape of the overall matrix operation. The ldm` attribute
+    specifies the leading dimension of the destination matrix.
+
+    This op is meant to be used along with `gpu.subgroup_mma_load_matrix` and
+    `gpu.subgroup_mma_compute`.
+
+    Example:
+
+    ```mlir
+    gpu.subgroup_mma_store_matrix %src, %dst : {dstOffsetJ = 16 : index,
+    dstOffsetI = 16 : index, ldm = 32 : ui16, wk = 16 : ui16, wm = 16: ui16,
+    wn = 16 : ui16} : memref<8xvector<2xf16>, 5>, memref<32x32xf16, 3>
+    ```
+  }];
+
+  let arguments = (ins Arg<AnyMemRef, "", [MemRead]>:$srcMemref,
+                  Arg<AnyMemRef, "",[MemWrite]>:$dstMemref,
+                  I64Attr:$dstOffsetI,
+                  I64Attr:$dstOffsetJ,
+                  UI16Attr:$wm,
+                  UI16Attr:$wn,
+                  UI16Attr:$wk,
+                  I64Attr:$ldm);
+
+  let assemblyFormat = [{
+    $srcMemref`,` $dstMemref attr-dict `:` type($srcMemref)`,` type($dstMemref)
+  }];
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def GPU_SubgroupMmaComputeOp : GPU_Op<"subgroup_mma_compute", [MemoryEffects<[MemRead, MemWrite]>]>{
+ 
+  let summary = "GPU warp synchronous matrix multiply accumulate";
+ 
+  let description = [{
+    The `gpu.subgroup_mma_store_matrix` operation performs a matrix-multiply
+    accumulate(mma) operation using all the threads in a subgroup.
+
+    This operation takes four memrefs as arguments. All four memrefs hold `A`, `B`, `C`
+    and `D` operands for the mma operation. The operation performed is represented
+    as `D = A * B + C`. All the memrefs are required to be the thread private
+    memory space. `wm`, `wn`, `wk` attributes represent the shape of the overall
+    matrix operation.
+
+    This op is meant to be used along with `gpu.subgroup_mma_store_matrix` and
+    `gpu.subgroup_mma_load_matrix`.
+
+    Example:
+
+    ```mlir
+    gpu.subgroup_mma_store_matrix %src, %dst : {dstOffsetJ = 16 : index,
+    dstOffsetI = 16 : index, ldm = 32 : ui16, wk = 16 : ui16, wm = 16: ui16,
+    wn = 16 : ui16} : memref<8xvector<2xf16>, 5>, memref<32x32xf16, 3>
+    ```
+  }];
+
+  let arguments = (ins Arg<AnyMemRef, "",[MemRead]>:$opA,
+                  Arg<AnyMemRef, "",[MemRead]>:$opB,
+                  Arg<AnyMemRef, "",[MemRead, MemWrite]>:$opC,
+                  Arg<AnyMemRef, "",[MemWrite]>:$opD,
+                  UI16Attr:$wm,
+                  UI16Attr:$wn,
+                  UI16Attr:$wk);
+
+  let assemblyFormat = [{
+    $opA`,` $opB`,` $opC`,` $opD attr-dict `:` type($opA)`,` type($opB)`,` type($opC)`,` type($opD)
+  }];
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
 #endif // GPU_OPS
