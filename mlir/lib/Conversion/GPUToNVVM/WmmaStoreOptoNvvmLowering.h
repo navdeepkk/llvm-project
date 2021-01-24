@@ -49,11 +49,7 @@ public:
     if (failed(areAllLLVMTypes(op, operands, rewriter)))
       return failure();
 
-    // Source memref of the original op.
-    MemRefType srcMemrefType =
-        subgroupMmaStoreMatrixOp.srcMemref().getType().cast<MemRefType>();
     Location loc = op->getLoc();
-    ArrayRef<int64_t> srcMemrefShape = srcMemrefType.getShape();
 
     // Destination memref of the original op.
     MemRefType dstMemrefType =
@@ -66,23 +62,16 @@ public:
         loc, op->getOperand(0), operands[0], rewriter);
 
     auto promotedDstOp = this->getTypeConverter()->promoteOperands(
-        loc, op->getOperand(1), operands[1],
-        rewriter);
+        loc, op->getOperand(1), operands[1], rewriter);
 
-    auto dstOffsetI = subgroupMmaStoreMatrixOp.dstOffsetIAttr();
-    auto dstOffsetJ = subgroupMmaStoreMatrixOp.dstOffsetJAttr();
-    auto wm = subgroupMmaStoreMatrixOp.wmAttr();
-    auto wn = subgroupMmaStoreMatrixOp.wnAttr();
-    auto wk = subgroupMmaStoreMatrixOp.wkAttr();
+    auto beginInx = subgroupMmaStoreMatrixOp.indices().getBeginOperandIndex();
     auto ldm = subgroupMmaStoreMatrixOp.ldmAttr();
 
     // Emit ops which compute the store offset using `dstOffsetI`,
     // `dstOffsetJ`. The actualOffset is (memrefOffset + (alignedPtr + ((ldm *
     // dstOffsetI) + dstOffsetJ)).
-    Value dstOffsetIVal = rewriter.create<LLVM::ConstantOp>(
-        loc, llvmTypes.llvmInt64Type, dstOffsetI);
-    Value dstOffsetJVal = rewriter.create<LLVM::ConstantOp>(
-        loc, llvmTypes.llvmInt64Type, dstOffsetJ);
+    Value dstOffsetIVal = subgroupMmaStoreMatrixOp.getOperand(beginInx);
+    Value dstOffsetJVal = subgroupMmaStoreMatrixOp.getOperand(beginInx + 1);
     Value leadingDim64 =
         rewriter.create<LLVM::ConstantOp>(loc, llvmTypes.llvmInt64Type, ldm);
     Value numElemsLeadDim = rewriter.create<LLVM::MulOp>(
@@ -111,8 +100,7 @@ public:
         promotedDstOp[1], ArrayRef<Value>{actualOffset});
 
     // Bitcast the base address pointer of the destination memref, So that
-    // values can be stored in chunks of 32-bits, as they were returned by the
-    // wmmaLoadOP.
+    // values can be stored in chunks of 32-bits.
     Value storeAddressCasted = rewriter.create<LLVM::BitcastOp>(
         loc,
         LLVM::LLVMPointerType::get(llvmTypes.llvmInt32Type,
@@ -122,18 +110,35 @@ public:
     SmallVector<Value, 4> storeOpOperands;
     storeOpOperands.push_back(storeAddressCasted);
 
+    // Get the load address for this fragment in the source memref.
+    Value srcLoadAddress = rewriter.create<LLVM::GEPOp>(
+        loc,
+        LLVM::LLVMPointerType::get(llvmTypes.llvmF16x8Ty,
+                                   /*NVVM private memory space*/ 0),
+        promotedSrcOp[1], subgroupMmaStoreMatrixOp.srcIndex());
+
+    // Bitcast the base address pointer of the destination memref, So that
+    // values can be stored in chunks of 32-bits, as they were returned by the
+    // wmmaLoadOP.
+    Value loadAddressCasted = rewriter.create<LLVM::BitcastOp>(
+        loc,
+        LLVM::LLVMPointerType::get(llvmTypes.llvmInt32Type,
+                                   /*NVVM private memory space*/ 0),
+        srcLoadAddress);
+
     // Unpack the results from the source memref.
-    for (unsigned i = 0, e = srcMemrefShape[0]; i < e; ++i) {
+    for (unsigned i = 0, e = llvmTypes.numHalfsInOpFrags[llvmTypes.D]; i < e;
+         ++i) {
       Value loadAddress = rewriter.create<LLVM::GEPOp>(
           loc,
-          LLVM::LLVMPointerType::get(llvmTypes.llvmF16x2Ty,
+          LLVM::LLVMPointerType::get(llvmTypes.llvmInt32Type,
                                      /*NVVM private memory space*/ 0),
-          promotedSrcOp[1],
+          loadAddressCasted,
           ArrayRef<Value>{rewriter.create<LLVM::ConstantOp>(
               loc, llvmTypes.llvmInt32Type, rewriter.getUI32IntegerAttr(i))});
-
-      storeOpOperands.push_back(
-          rewriter.create<LLVM::LoadOp>(loc, loadAddress));
+      Value toStore = rewriter.create<LLVM::LoadOp>(loc, loadAddress);
+      storeOpOperands.push_back(rewriter.create<LLVM::BitcastOp>(
+          loc, llvmTypes.llvmF16x2Ty, toStore));
     }
 
     // For NVPTX intrinsic compatibility, create an I32 constant op for ldm.
@@ -145,10 +150,7 @@ public:
 
     // Create nvvm.mma_store op.
     ValueRange unpackedValueRange(storeOpOperands);
-    rewriter.create<NVVM::WMMAStoreOp>(
-        loc, storeOpOperands, wm.cast<mlir::IntegerAttr>(),
-        wn.cast<mlir::IntegerAttr>(), wk.cast<mlir::IntegerAttr>(),
-        ldm.cast<mlir::IntegerAttr>());
+    rewriter.create<NVVM::WMMAStoreOp>(loc, storeOpOperands);
 
     rewriter.eraseOp(op);
     return success();

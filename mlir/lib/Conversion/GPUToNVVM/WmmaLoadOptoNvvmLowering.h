@@ -54,16 +54,7 @@ public:
         subgroupMmaLoadMatrixOp.srcMemref().getType().cast<MemRefType>();
     Location loc = op->getLoc();
 
-    // Destination memref of the original op.
-    MemRefType dstMemrefType =
-        subgroupMmaLoadMatrixOp.dstMemref().getType().cast<MemRefType>();
-    ArrayRef<int64_t> dstMemrefShape = dstMemrefType.getShape();
-
-    auto srcOffsetI = subgroupMmaLoadMatrixOp.srcOffsetIAttr();
-    auto srcOffsetJ = subgroupMmaLoadMatrixOp.srcOffsetJAttr();
-    auto wm = subgroupMmaLoadMatrixOp.wmAttr();
-    auto wn = subgroupMmaLoadMatrixOp.wnAttr();
-    auto wk = subgroupMmaLoadMatrixOp.wkAttr();
+    auto beginInx = subgroupMmaLoadMatrixOp.indices().getBeginOperandIndex();
     auto ldm = subgroupMmaLoadMatrixOp.ldmAttr();
     auto operand = subgroupMmaLoadMatrixOp.operandAttr();
 
@@ -78,10 +69,9 @@ public:
     // `srcOffsetJ`. The actualOffset is (memrefOffset + (alignedPtr + ((ldm *
     // srcOffsetI) + srcOffsetJ)). The memrefs here are assumed to be normalized
     // and hence the simple conversion works.
-    Value srcOffsetIVal = rewriter.create<LLVM::ConstantOp>(
-        loc, llvmTypes.llvmInt64Type, srcOffsetI);
-    Value srcOffsetJVal = rewriter.create<LLVM::ConstantOp>(
-        loc, llvmTypes.llvmInt64Type, srcOffsetJ);
+    Value srcOffsetIVal = subgroupMmaLoadMatrixOp->getOpOperand(beginInx).get();
+    Value srcOffsetJVal =
+        subgroupMmaLoadMatrixOp->getOpOperand(beginInx + 1).get();
     Value leadingDim64 =
         rewriter.create<LLVM::ConstantOp>(loc, llvmTypes.llvmInt64Type, ldm);
     Value numElemsLeadDim = rewriter.create<LLVM::MulOp>(
@@ -117,13 +107,19 @@ public:
                                    srcMemrefType.getMemorySpace()),
         loadAddress);
 
-    // Result type for wmmaLoadOp.
-    Type resType;
+    // Result types for wmmaLoadOp.
+    LLVM::LLVMType resType, dstMemrefElemType;
+    unsigned numElemsInResFrag;
     if (operand.cast<mlir::StringAttr>().getValue().equals("AOp") ||
-        operand.cast<mlir::StringAttr>().getValue().equals("BOp"))
+        operand.cast<mlir::StringAttr>().getValue().equals("BOp")) {
       resType = llvmTypes.fragArrayABTy;
-    else
+      dstMemrefElemType = llvmTypes.llvmF16x16Ty;
+      numElemsInResFrag = llvmTypes.numHalfsInOpFrags[llvmTypes.A];
+    } else {
       resType = llvmTypes.fragArrayCDTy;
+      dstMemrefElemType = llvmTypes.llvmF16x8Ty;
+      numElemsInResFrag = llvmTypes.numHalfsInOpFrags[llvmTypes.C];
+    }
 
     // For NVPTX intrinsic compatibility, create an I32 constant op for ldm.
     // This might result in loss of data. leadingDim is in number of elements
@@ -135,9 +131,14 @@ public:
     ValueRange loadOpOperands({loadAddressCasted, leadingDim32});
 
     NVVM::WMMALoadOp wmmaLoadOp = rewriter.create<NVVM::WMMALoadOp>(
-        loc, resType, loadOpOperands, wm.cast<mlir::IntegerAttr>(),
-        wn.cast<mlir::IntegerAttr>(), wk.cast<mlir::IntegerAttr>(),
-        ldm.cast<mlir::IntegerAttr>(), operand.cast<mlir::StringAttr>());
+        loc, resType, loadOpOperands, operand.cast<mlir::StringAttr>());
+
+    // Get the store address for this fragment in the destination memref.
+    Value dstStoreAddress = rewriter.create<LLVM::GEPOp>(
+        loc,
+        LLVM::LLVMPointerType::get(dstMemrefElemType,
+                                   /*NVVM private memory space*/ 0),
+        promotedDstOp[1], subgroupMmaLoadMatrixOp.dstIndex());
 
     // Bitcast the base address pointer of the destination memref, So that
     // values can be stored in chunks of 32-bits, as they were returned by the
@@ -146,13 +147,13 @@ public:
         loc,
         LLVM::LLVMPointerType::get(llvmTypes.llvmInt32Type,
                                    /*NVVM private memory space*/ 0),
-        promotedDstOp[1]);
+        dstStoreAddress);
 
     // Move the data into the memref that was passed as an argument to the
     // original op. The result of the op is a !llvm.struct, the results are to
     // be moved into the memref element by element. The number of elements in
     // the memref and the number of elements in the struct should be same.
-    for (unsigned i = 0, e = dstMemrefShape[0]; i < e; ++i) {
+    for (unsigned i = 0, e = numElemsInResFrag; i < e; ++i) {
       Value toStore = rewriter.create<LLVM::ExtractValueOp>(
           loc, llvmTypes.llvmF16x2Ty, wmmaLoadOp,
           rewriter.getIndexArrayAttr(i));

@@ -21,12 +21,19 @@ namespace mlir {
 struct CommonLLVMTypes {
 public:
   CommonLLVMTypes(MLIRContext *context) {
+    numHalfsInOpFrags.resize(4);
+    numHalfsInOpFrags[A] = 8;
+    numHalfsInOpFrags[B] = 8;
+    numHalfsInOpFrags[C] = 4;
+    numHalfsInOpFrags[D] = 4;
     llvmInt8Type = LLVM::LLVMType::getInt8Ty(context);
     llvmInt64Type = LLVM::LLVMType::getInt64Ty(context);
     llvmInt32Type = LLVM::LLVMType::getInt32Ty(context);
     llvmInt32PtrTy = LLVM::LLVMPointerType::get(llvmInt32Type);
     llvmF16Ty = LLVM::LLVMType::getHalfTy(context);
     llvmF16PtrTy = LLVM::LLVMPointerType::get(llvmF16Ty);
+    llvmF16x8Ty = LLVM::LLVMType::getVectorTy(llvmF16Ty, 8);
+    llvmF16x16Ty = LLVM::LLVMType::getVectorTy(llvmF16Ty, 16);
     llvmF16x2Ty = LLVM::LLVMType::getVectorTy(llvmF16Ty, 2);
     fragArrayABTy = LLVM::LLVMType::getStructTy(
         context, SmallVector<LLVM::LLVMType>(8, llvmF16x2Ty));
@@ -43,10 +50,14 @@ public:
   LLVM::LLVMType llvmF16Ty;
   LLVM::LLVMType llvmF16PtrTy;
   LLVM::LLVMType llvmF16x2Ty;
+  LLVM::LLVMType llvmF16x8Ty;
+  LLVM::LLVMType llvmF16x16Ty;
   LLVM::LLVMType fragArrayABTy;
   LLVM::LLVMType fragArrayABPtrTy;
   LLVM::LLVMType fragArrayCDTy;
   LLVM::LLVMType fragArrayCDPtrTy;
+  SmallVector<unsigned, 4> numHalfsInOpFrags;
+  enum operandMap { A, B, C, D };
 };
 
 } // namespace mlir

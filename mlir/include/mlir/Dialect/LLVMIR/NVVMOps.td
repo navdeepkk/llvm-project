@@ -146,13 +146,9 @@ def NVVM_MmaOp :
 }
 
 def NVVM_WMMALoadOp :
-  NVVM_Op<"wmma.load">,
+  NVVM_Op<"wmma.m16n16k16.load">,
   Results<(outs LLVM_AnyStruct:$res)>,
   Arguments<(ins Variadic<LLVM_Type>:$args,
-            UI16Attr:$wm,
-            UI16Attr:$wn,
-            UI16Attr:$wk,
-            I64Attr:$ldm,
             SubgroupMmaOperand:$operand)> {
   string llvmBuilder = [{
     if($operand.compare("AOp") == 0)
@@ -171,24 +167,21 @@ def NVVM_WMMALoadOp :
   let summary = "Warp synchronous matrix load";
 
   let description = [{ 
-    The `nvvm.wmma.load` operation loads a matrix collectively using all the threads
+    The `nvvm.wmma.m16n16k16.load` operation loads a matrix collectively using all the threads
     in a warp.
 
     The operation takes two arguments, the address from where the matrix elements are
     to be loaded from and a stride. The stride argument represents the leading dimension
     of the source matrix. The address and the stride are required to be the same across
-    all threads in the warp. The Shape and type of the matrix being loaded are specified
-    using the attribiutes `wm`, `wn`, `wk` and `operand`. Each thread in a warp holds a
-    certain number of elements. The Op returns a LLVM struct which holds the elements of
-    the matrix held by this thread.
+    all threads in the warp. Each thread in a warp holds a certain number of elements.
+    The Op returns a LLVM struct which holds the elements of the matrix held by this thread.
 
-    This op is meant to be used along with `nvvm.wmma.store` and `nvvm.wmma.mma`.
+    This op is meant to be used along with `nvvm.wmma.m16n16k16.store` and `nvvm.wmma.m16n16k16.mma`.
 
     Example:
     
     ```mlir
-    %2 = nvvm.wmma.load %0, %1 {ldm = 32 : i64, operand = "AOp", wk = 16 :
-    ui16, wm = 16 : ui16, wn = 16 : ui16} : !llvm.ptr<i32, 3>, !llvm.i32 ->
+    %2 = nvvm.wmma.m16n16k16.load %0, %1 : !llvm.ptr<i32, 3>, !llvm.i32 ->
     !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>,
     vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>
     ```
@@ -200,12 +193,8 @@ def NVVM_WMMALoadOp :
 }
 
 def NVVM_WMMAStoreOp :
-  NVVM_Op<"wmma.store">,
-  Arguments<(ins Variadic<LLVM_Type>:$args,
-            UI16Attr:$wm,
-            UI16Attr:$wn,
-            UI16Attr:$wk,
-            I64Attr:$ldm)> {
+  NVVM_Op<"wmma.m16n16k16.store">,
+  Arguments<(ins Variadic<LLVM_Type>:$args)>{
   string llvmBuilder = [{
         createNvvmIntrinsicCall(
         builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_store_d_f16_row_stride, $args);
@@ -214,23 +203,21 @@ def NVVM_WMMAStoreOp :
   let summary = "Warp synchronous matrix store";
   
   let description = [{ 
-    The `nvvm.wmma.store` operation stores a matrix collectively using all the threads
+    The `nvvm.wmma.m16n16k16.store` operation stores a matrix collectively using all the threads
     in a warp.
 
     The operation takes as arguments the address to where the matrix elements are
     to be stored, a stride and the elements to store, held by the current thread.
     The stride argument represents the leading dimension of the destination matrix.
     The address and the stride are required to be the same across all threads in the
-    warp. The Shape of the matrix being stored are specified using the attribiutes
-    `wm`, `wn`, `wk`.
+    warp.
 
-    This op is meant to be used along with `nvvm.wmma.load` and `nvvm.wmma.mma`.
+    This op is meant to be used along with `nvvm.wmma.m16n16k16.load` and `nvvm.wmma.m16n16k16.mma`.
 
     Example:
     
     ```mlir
-    nvvm.wmma.store %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10{ldm = 32 : i64,
-    , wk = 16 : ui16, wm = 16 : ui16, wn = 16 : ui16} : !llvm.ptr<i32, 3>
+    nvvm.wmma.m16n16k16.store %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10 : !llvm.ptr<i32, 3>
     !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>,
     vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>, !llvm.i32
     ```
@@ -242,12 +229,9 @@ def NVVM_WMMAStoreOp :
 }
 
 def NVVM_WMMAMmaOp :
-  NVVM_Op<"wmma.mma">,
+  NVVM_Op<"wmma.m16n16k16.mma">,
   Results<(outs LLVM_AnyStruct:$res)>,
-  Arguments<(ins Variadic<LLVM_Type>:$args,
-            UI16Attr:$wm,
-            UI16Attr:$wn,
-            UI16Attr:$wk)> {
+  Arguments<(ins Variadic<LLVM_Type>:$args)>{
   string llvmBuilder = [{
     $res = createNvvmIntrinsicCall(
         builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f16_f16, $args);
@@ -256,29 +240,28 @@ def NVVM_WMMAMmaOp :
   let summary = "Warp synchronous matrix-multiply accumulate using tensor cores.";
 
   let description = [{ 
-    The `nvvm.wmma.stores` operation performs a matrix-multiply accumulate(mma)
+    The `nvvm.wmma.m16n16k16.mma` operation performs a matrix-multiply accumulate(mma)
     operation using all the threads in a warp.
 
     The operation performed is represented as `D = A * B + C`. The operation takes
     as arguments the elements of the matrices `A`, `B`, `C` and `D`, held by the
-    current thread. The Shape of the overall operation is represented using the
-    attribiutes `wm`, `wn`, `wk`. The op returns a LLVM struct which holds a part
-    of the result held by the current thread. 
+    current thread. The op returns a LLVM struct which holds a part of the result
+    held by the current thread. 
 
-    This op is meant to be used along with `nvvm.wmma.load` and `nvvm.wmma.store`.
+    This op is meant to be used along with `nvvm.wmma.m16n16k16.load` and `nvvm.wmma.
+    m16n16k16.store`.
 
     Example:
     
     ```mlir
-    %20 = nvvm.wmma.mma %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10, %11, %12,
-    %13, %14, %15, %16, %17, %18, %19 {wk = 16 : ui16, wm = 16 : ui16, wn = 16 :
-    ui16} : !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
+    %20 = nvvm.wmma.m16n16k16.mma %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10, %11, %12,
+    %13, %14, %15, %16, %17, %18, %19 : !llvm.vec<2 x half>, !llvm.vec<2 x half>,
     !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
     !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
     !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
     !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>, !llvm.vec<2 x half>,
-    !llvm.vec<2 x half> -> !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>,
-    vec<2 x half>)>
+    !llvm.vec<2 x half>, !llvm.vec<2 x half> -> !llvm.struct<(vec<2 x half>, vec<2 x half>,
+    vec<2 x half>, vec<2 x half>)>
     ```
   }];
   

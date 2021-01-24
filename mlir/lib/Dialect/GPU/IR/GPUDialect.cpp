@@ -908,27 +908,25 @@ static LogicalResult verify(SubgroupMmaLoadMatrixOp op) {
   if (!srcElemType.isF16())
     return op.emitOpError("Operands of type F16 only allowed");
 
+  if(srcMemrefType.getRank() != 2 || !srcElemType.isF16())
+    return op.emitError("Source memref should be of rank 2 and have f16 elements."); 
+
   if (auto dstVecTy = dstElemType.dyn_cast<VectorType>()) {
     if (op.operand().equals("AOp") || op.operand().equals("BOp")) {
       if (!dstVecTy.getElementType().isF16() || dstVecTy.getRank() != 1 ||
-          dstVecTy.getDimSize(0) != 2 || dstMemrefType.getRank() != 1 ||
-          dstMemrefType.getDimSize(0) != 8)
+          dstVecTy.getDimSize(0) != 16 || dstMemrefType.getRank() != 1)
         return op.emitError(
-            "Destination for AOp and BOp should be memref<8xvec<2xf16>>");
+            "Destination for AOp and BOp should be memref<?xvec<16xf16>>");
     }
     if (op.operand().equals("COp")) {
       if (!dstVecTy.getElementType().isF16() || dstVecTy.getRank() != 1 ||
-          dstVecTy.getDimSize(0) != 2 || dstMemrefType.getRank() != 1 ||
-          dstMemrefType.getDimSize(0) != 4)
+          dstVecTy.getDimSize(0) != 8 || dstMemrefType.getRank() != 1)
         return op.emitError(
-            "Destination for COp should be of shape memref<4xvec<2xf16>>");
+            "Destination for COp should be of shape memref<?xvec<8xf16>>");
     }
   } else
     return op.emitError(
         "Element type of Destination memref should be of vector type");
-
-  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
-    return op.emitError("WMMA shape of 16x16x16 only implemented");
 
   return success();
 }
@@ -950,22 +948,19 @@ static LogicalResult verify(SubgroupMmaStoreMatrixOp op) {
   if ((dstMemSpace != 0 && dstMemSpace != 3) || srcMemSpace != 5)
     return op.emitError("Source memorySpace of `0` or `3` and destination "
                         "memorySpace of `5` is only allowed");
-
-  if (!dstElemType.isF16())
-    return op.emitOpError("Destination memref of type F16 only allowed");
+  
+  if(dstMemrefType.getRank() != 2 || !dstElemType.isF16())
+    return op.emitError("Source memref should be of rank 2 and have f16 elements."); 
 
   if (auto srcVecTy = srcElemType.dyn_cast<VectorType>()) {
     if (!srcVecTy.getElementType().isF16() || srcVecTy.getRank() != 1 ||
-        srcVecTy.getDimSize(0) != 2 || srcMemrefType.getRank() != 1 ||
-        srcMemrefType.getDimSize(0) != 4)
+        srcVecTy.getDimSize(0) != 8 || srcMemrefType.getRank() != 1)
       return op.emitError(
-          "Source memref should be of shape memref<4xvec<2xf16>>");
+          "Source memref should be of shape memref<?xvec<8xf16>>");
   } else
     return op.emitError(
-        "Source memref should be of shape memref<4xvec<2xf16>>");
+        "Source memref should be of shape memref<?xvec<8xf16>>");
 
-  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
-    return op.emitError("WMMA shape of 16x16x16 only implemented");
 
   return success();
 }
@@ -1003,8 +998,7 @@ static LogicalResult verify(SubgroupMmaComputeOp op) {
                         unsigned numElems) {
     if (auto srcVecTy = elemType.dyn_cast<VectorType>()) {
       if (!srcVecTy.getElementType().isF16() || srcVecTy.getRank() != 1 ||
-          srcVecTy.getDimSize(0) != 2 || memrefType.getRank() != 1 ||
-          memrefType.getDimSize(0) != numElems) {
+          srcVecTy.getDimSize(0) != numElems || memrefType.getRank() != 1 ) {
         return false;
       } else {
         return true;
@@ -1013,16 +1007,13 @@ static LogicalResult verify(SubgroupMmaComputeOp op) {
       return false;
   };
 
-  if (!verifyElems(elemTypes[A], opTypes[A], 8) ||
-      !verifyElems(elemTypes[B], opTypes[B], 8) ||
-      !verifyElems(elemTypes[C], opTypes[C], 4) ||
-      !verifyElems(elemTypes[D], opTypes[D], 4))
+  if (!verifyElems(elemTypes[A], opTypes[A], 16) ||
+      !verifyElems(elemTypes[B], opTypes[B], 16) ||
+      !verifyElems(elemTypes[C], opTypes[C], 8) ||
+      !verifyElems(elemTypes[D], opTypes[D], 8))
     return op.emitError(
-        "A and B must be of type memref<8xvector<2xf16>>, C and "
-        "D must of type memref<4xvector<2xf16>>");
-
-  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
-    return op.emitError("WMMA shape of 16x16x16 only implemented");
+        "A and B must be of type memref<?xvector<16xf16>>, C and "
+        "D must of type memref<?xvector<8xf16>>");
 
   return success();
 }

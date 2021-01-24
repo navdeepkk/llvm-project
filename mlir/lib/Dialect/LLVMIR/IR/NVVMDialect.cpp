@@ -166,9 +166,6 @@ static LogicalResult verify(WMMALoadOp op) {
     }
   }
 
-  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
-    return op.emitError("WMMA shape of 16x16x16 only implemented");
-
   return success();
 }
 
@@ -193,9 +190,6 @@ static LogicalResult verify(WMMAStoreOp op) {
                           "by ldm of the source");
   }
 
-  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
-    return op.emitError("WMMA shape of 16x16x16 only implemented");
-
   return success();
 }
 
@@ -217,9 +211,6 @@ static LogicalResult verify(WMMAMmaOp op) {
     return op.emitOpError(
         "expected result type of AOp and BOp to be a struct of 8 <halfx2>s");
   }
-
-  if (op.wm() != 16 || op.wn() != 16 || op.wk() != 16)
-    return op.emitError("WMMA shape of 16x16x16 only implemented");
 
   return success();
 }

@@ -25,7 +25,6 @@ namespace mlir {
 struct WmmaMmaOptoNVVMLowering
     : public ConvertOpToLLVMPattern<gpu::SubgroupMmaComputeOp> {
 public:
-  enum operandMap { A, B, C, D };
   MLIRContext *context = &this->getTypeConverter()->getContext();
 
   explicit WmmaMmaOptoNVVMLowering(LLVMTypeConverter &typeConverter)
@@ -55,10 +54,10 @@ public:
 
     SmallVector<MemRefType, 4> opTypes;
     SmallVector<Type, 4> elemTypes;
-    SmallVector<ArrayRef<int64_t>, 4> opShapes;
+    SmallVector<LLVM::LLVMType, 4> llvmElemTypes;
+    SmallVector<Value, 4> opIndices;
 
-    auto populateOpInfo = [&opTypes, &elemTypes, &opShapes,
-                           &subgroupMmaComputeOp]() {
+    auto populateOpInfo = [&]() {
       opTypes.push_back(
           subgroupMmaComputeOp.opA().getType().cast<MemRefType>());
       opTypes.push_back(
@@ -70,9 +69,19 @@ public:
 
       for (MemRefType opType : opTypes) {
         elemTypes.push_back(opType.getElementType());
-        opShapes.push_back(opType.getShape());
       }
+
+      opIndices.push_back(subgroupMmaComputeOp.AIndex());
+      opIndices.push_back(subgroupMmaComputeOp.BIndex());
+      opIndices.push_back(subgroupMmaComputeOp.CIndex());
+      opIndices.push_back(subgroupMmaComputeOp.DIndex());
+
+      llvmElemTypes.push_back(llvmTypes.llvmF16x16Ty);
+      llvmElemTypes.push_back(llvmTypes.llvmF16x16Ty);
+      llvmElemTypes.push_back(llvmTypes.llvmF16x8Ty);
+      llvmElemTypes.push_back(llvmTypes.llvmF16x8Ty);
     };
+
     // Gather type, shape info fo the memrefs.
     populateOpInfo();
 
@@ -82,16 +91,15 @@ public:
     SmallVector<SmallVector<Value, 4>, 4> promotedOps;
     promotedOps.resize(4);
 
-    auto promoteOps = [&](operandMap operand) {
+    auto promoteOps = [&](CommonLLVMTypes::operandMap operand) {
       promotedOps[operand] = this->getTypeConverter()->promoteOperands(
-          loc, op->getOperand(operand), operands[operand],
-          rewriter);
+          loc, op->getOperand(operand), operands[operand], rewriter);
     };
 
-    promoteOps(A);
-    promoteOps(B);
-    promoteOps(C);
-    promoteOps(D);
+    promoteOps(llvmTypes.A);
+    promoteOps(llvmTypes.B);
+    promoteOps(llvmTypes.C);
+    promoteOps(llvmTypes.D);
 
     // The wmma.mma intrinsic in llvm requires the operands as individual
     // values. So individual elements from the memrefs need to be extracted and
@@ -99,36 +107,53 @@ public:
     // values form lowered memrefs.
     SmallVector<Value, 24> unpackedOps;
 
-    auto unpackOp = [&](operandMap op) {
-      for (unsigned i = 0, e = opShapes[op][0]; i < e; ++i) {
+    auto unpackOp = [&](CommonLLVMTypes::operandMap op) {
+      // Get the store address for this fragment in the destination memref.
+      Value loadAddress = rewriter.create<LLVM::GEPOp>(
+          loc,
+          LLVM::LLVMPointerType::get(llvmElemTypes[op],
+                                     /*NVVM private memory space*/ 0),
+          promotedOps[op][1], opIndices[op]);
+
+      // Cast the address from vector<16xhalf>* to int32, to i32* to load
+      // the elements in chunks of 32-bits.
+      Value loadAddressCasted = rewriter.create<LLVM::BitcastOp>(
+          loc,
+          LLVM::LLVMPointerType::get(llvmTypes.llvmInt32Type,
+                                     /*NVVM private memory space*/ 0),
+          loadAddress);
+
+      for (unsigned i = 0, e = llvmTypes.numHalfsInOpFrags[op]; i < e; ++i) {
         Value loadAddress = rewriter.create<LLVM::GEPOp>(
             loc,
-            LLVM::LLVMPointerType::get(llvmTypes.llvmF16x2Ty,
+            LLVM::LLVMPointerType::get(llvmTypes.llvmInt32Type,
                                        /*NVVM private memory space*/ 0),
-            promotedOps[op][1],
+            loadAddressCasted,
             ArrayRef<Value>{rewriter.create<LLVM::ConstantOp>(
                 loc, llvmTypes.llvmInt32Type, rewriter.getUI32IntegerAttr(i))});
-
-        unpackedOps.push_back(rewriter.create<LLVM::LoadOp>(loc, loadAddress));
+        Value toStore = rewriter.create<LLVM::LoadOp>(loc, loadAddress);
+        unpackedOps.push_back(rewriter.create<LLVM::BitcastOp>(
+            loc, llvmTypes.llvmF16x2Ty, toStore));
       }
     };
 
-    unpackOp(A);
-    unpackOp(B);
-    unpackOp(C);
-
-    auto wm = subgroupMmaComputeOp.wmAttr();
-    auto wn = subgroupMmaComputeOp.wnAttr();
-    auto wk = subgroupMmaComputeOp.wkAttr();
+    unpackOp(llvmTypes.A);
+    unpackOp(llvmTypes.B);
+    unpackOp(llvmTypes.C);
 
     // Operand holder for wmma.mma.op.
     ValueRange wmmaMmaOpOperands(unpackedOps);
 
     // Create nvvm.wmma.mma op.
     NVVM::WMMAMmaOp wmmaMmaOp = rewriter.create<NVVM::WMMAMmaOp>(
-        loc, llvmTypes.fragArrayCDTy, wmmaMmaOpOperands,
-        wm.cast<mlir::IntegerAttr>(), wn.cast<mlir::IntegerAttr>(),
-        wk.cast<mlir::IntegerAttr>());
+        loc, llvmTypes.fragArrayCDTy, wmmaMmaOpOperands);
+
+    // Get the store address for this fragment in the destination memref.
+    Value dstStoreAddress = rewriter.create<LLVM::GEPOp>(
+        loc,
+        LLVM::LLVMPointerType::get(llvmElemTypes[llvmTypes.D],
+                                   /*NVVM private memory space*/ 0),
+        promotedOps[llvmTypes.D][1], subgroupMmaComputeOp.DIndex());
 
     // Bitcast the base address pointer of the destination memref, So that
     // values can be stored in chunks of 32-bits, as they were returned by the
@@ -137,10 +162,11 @@ public:
         loc,
         LLVM::LLVMPointerType::get(llvmTypes.llvmInt32Type,
                                    /*NVVM private memory space*/ 0),
-        promotedOps[D][1]);
+        dstStoreAddress);
 
     // Store the results in memref D.
-    for (unsigned i = 0, e = opShapes[D][0]; i < e; ++i) {
+    for (unsigned i = 0, e = llvmTypes.numHalfsInOpFrags[llvmTypes.D]; i < e;
+         ++i) {
       Value toStore = rewriter.create<LLVM::ExtractValueOp>(
           loc, llvmTypes.llvmF16x2Ty, wmmaMmaOp, rewriter.getIndexArrayAttr(i));
       Value toStoreI32 = rewriter.create<LLVM::BitcastOp>(
