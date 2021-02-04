@@ -115,6 +115,15 @@ struct GpuToCubinPipelineOptions
       llvm::cl::desc("Annotation attribute string for GPU binary")};
 };
 
+static llvm::cl::opt<std::string>
+    clSMVersion("sm", llvm::cl::desc("SM version to target"),
+                llvm::cl::init("sm_35"));
+
+static llvm::cl::opt<unsigned>
+    clIndexWidth("index-bitwidth",
+                 llvm::cl::desc("Bitwidth of index type to use for lowering"),
+                 llvm::cl::init(32));
+
 // Register cuda-runner specific passes.
 static void registerCudaRunnerPasses() {
   PassPipelineRegistration<GpuToCubinPipelineOptions> registerGpuToCubin(
@@ -124,9 +133,9 @@ static void registerCudaRunnerPasses() {
         auto &kernelPm = pm.nest<gpu::GPUModuleOp>();
         kernelPm.addPass(createStripDebugInfoPass());
         kernelPm.addPass(createLowerGpuOpsToNVVMOpsPass());
-        kernelPm.addPass(createConvertGPUKernelToBlobPass(
-            translateModuleToLLVMIR, compilePtxToCubin, "nvptx64-nvidia-cuda",
-            "sm_35", "+ptx60", options.gpuBinaryAnnotation));
+	kernelPm.addPass(createConvertGPUKernelToBlobPass(
+	    translateModuleToLLVMIR, compilePtxToCubin, "nvptx64-nvidia-cuda",
+	    clSMVersion.getValue(), "+ptx60", options.gpuBinaryAnnotation));
       });
   registerGPUPasses();
   registerGpuToLLVMConversionPassPass();
