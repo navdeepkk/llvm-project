@@ -458,3 +458,86 @@ func @memcpy_incompatible_shape(%dst : memref<7xf32>, %src : memref<9xf32>) {
   // expected-error @+1 {{'gpu.memcpy' op arguments have incompatible shape}}
   gpu.memcpy %dst, %src  : memref<7xf32>, memref<9xf32>
 }
+
+// -----
+
+func @mmfragment_invalid_elem_type(){
+    %wg = alloca() {alignment = 32} : memref<32x32xf16, 3>
+    %i = constant 16 : index
+    // expected-error @+1 {{MMAFragmentType elements must be vector<2xf16>}}
+    %0 = gpu.subgroup_mma_load_matrix %wg[%i, %i] {operand = "AOp", leadDimension = 32 : index} : memref<32x32xf16, 3> -> !gpu.mmafragment<8, vector<4xf16>>
+    return
+}
+
+// -----
+
+func @mmfragment_invalid_size(){
+    %wg = alloca() {alignment = 32} : memref<32x32xf16, 3>
+    %i = constant 16 : index
+    // expected-error @+1 {{MMAFragmentType size must be atleast one}}
+    %0 = gpu.subgroup_mma_load_matrix %wg[%i, %i] {operand = "AOp", leadDimension = 32 : index} : memref<32x32xf16, 3> -> !gpu.mmafragment<0, vector<4xf16>>
+    return
+}
+
+// -----
+#layout_map_col_major = affine_map<(i, j) -> (j, i)>
+
+func @mmaLoadOp_identity_layout(){
+    %wg = alloca() {alignment = 32} : memref<32x32xf16, #layout_map_col_major, 3>
+    %i = constant 16 : index
+    // expected-error @+1 {{expected identity layout map for source memref}}
+    %0 = gpu.subgroup_mma_load_matrix %wg[%i, %i] {operand = "AOp", leadDimension = 32 : index} : memref<32x32xf16, #layout_map_col_major, 3> -> !gpu.mmafragment<8, vector<2xf16>>
+    return
+}
+
+// -----
+
+func @mmaLoadOp_invalid_mem_space(){
+    %wg = alloca() {alignment = 32} : memref<32x32xf16, 5>
+    %i = constant 16 : index
+    // expected-error @+1 {{source memorySpace kGenericMemorySpace, kSharedMemorySpace or kGlobalMemorySpace only allowed}}
+    %0 = gpu.subgroup_mma_load_matrix %wg[%i, %i] {operand = "AOp", leadDimension = 32 : index} : memref<32x32xf16, 5> -> !gpu.mmafragment<8, vector<2xf16>>
+    return
+}
+
+// -----
+#layout_map_col_major = affine_map<(i, j) -> (j, i)>
+
+func @wmmaStoreOp_invalid_map(%arg0 : !gpu.mmafragment<4, vector<2xf16>>) -> () {
+    %sg = alloca(){alignment = 32} : memref<32x32xf16, #layout_map_col_major, 3>
+    %i = constant 16 : index
+    %j = constant 16 : index
+    // expected-error @+1 {{expected identity layout map for destination memref}}
+    gpu.subgroup_mma_store_matrix %arg0, %sg[%i,%j] {leadDimension= 32 : index} : !gpu.mmafragment<4, vector<2xf16>>, memref<32x32xf16,#layout_map_col_major, 3>
+    return
+}
+
+// -----
+
+func @wmmaStoreOp_invalid_mem_space(%arg0 : !gpu.mmafragment<4, vector<2xf16>>) -> () {
+    %sg = alloca(){alignment = 32} : memref<32x32xf16, 5>
+    %i = constant 16 : index
+    %j = constant 16 : index
+    // expected-error @+1 {{destination memorySpace of kGenericMemorySpace, kGlobalMemorySpace or kSharedMemorySpace only allowed}}
+    gpu.subgroup_mma_store_matrix %arg0, %sg[%i,%j] {leadDimension= 32 : index} : !gpu.mmafragment<4, vector<2xf16>>, memref<32x32xf16, 5>
+    return
+}
+
+// -----
+
+func @wmmaStoreOp_invalid_mem_space(%arg0 : !gpu.mmafragment<5, vector<2xf16>>) -> () {
+    %sg = alloca(){alignment = 32} : memref<32x32xf16, 3>
+    %i = constant 16 : index
+    %j = constant 16 : index
+    // expected-error @+1 {{operand should be of type !gpu.mmafragment<4xvector<2xf16>>}}
+    gpu.subgroup_mma_store_matrix %arg0, %sg[%i,%j] {leadDimension= 32 : index} : !gpu.mmafragment<5, vector<2xf16>>, memref<32x32xf16, 3>
+    return
+}
+
+// -----
+
+func @wmmaMmaOp_invalid_operand_shape(%A : !gpu.mmafragment<3, vector<2xf16>>, %B : !gpu.mmafragment<8, vector<2xf16>>, %C : !gpu.mmafragment<4, vector<2xf16>>) -> () {
+    // expected-error @+1 {{A and B must be of type !gpu.mmafragment<8xvector<2xf16>> and C must of type !gpu.mmafragment<4xvector<2xf16>>}}
+    %D = gpu.subgroup_mma_compute %A, %B, %C : !gpu.mmafragment<3, vector<2xf16>>, !gpu.mmafragment<8, vector<2xf16>>, !gpu.mmafragment<4, vector<2xf16>> -> !gpu.mmafragment<4, vector<2xf16>>
+    return
+}

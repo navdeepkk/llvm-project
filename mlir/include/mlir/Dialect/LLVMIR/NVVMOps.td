@@ -144,4 +144,202 @@ def NVVM_MmaOp :
   let verifier = [{ return ::verify(*this); }];
 }
 
+class NVVM_WMMALoadOp<string mnemonic> : NVVM_Op<mnemonic>,
+  Results<(outs LLVM_AnyStruct:$res)>,
+  Arguments<(ins Variadic<LLVM_Type>:$args)> {
+
+  let summary = "Warp synchronous matrix load";
+
+  string baseDescription = [{"The `nvvm.wmma.m16n16k16.load.[a, b, c]` operation"
+    "loads a matrix collectively using all the threads in a warp."
+
+    "The operation takes two arguments, the address from where the matrix"
+    "elements are to be loaded from and a stride. The stride argument"
+    "represents the leading dimension of the source matrix. The address and"
+    "the stride are required to be the same across all threads in the warp."
+    "Each thread in a warp holds a certain number of elements. The Op returns"
+    "a LLVMStruct which holds the elements of the matrix held by this thread."
+
+    "This op is meant to be used along with `nvvm.wmma.m16n16k16.store` and"
+    "`nvvm.wmma.m16n16k16.mma`."}];
+
+  let assemblyFormat = "$args attr-dict `:` functional-type($args, $res)";
+}
+
+def NVVM_WMMALoadAOp :
+  NVVM_WMMALoadOp<"wmma.m16n16k16.load.a.f16.row.stride">{
+
+  string llvmBuilder = [{
+    $res = createNvvmIntrinsicCall(
+      builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_load_a_f16_row_stride, $args);
+  }];
+
+  string opDescription = [{
+    Example:
+
+    ```mlir
+    %2 = nvvm.wmma.m16n16k16.load.a %0, %1 : !llvm.ptr<i32, 3>, !llvm.i32 ->
+    !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>,
+    vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>
+    ```
+  }];
+
+  let description = !strconcat(baseDescription, opDescription);
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def NVVM_WMMALoadBOp :
+  NVVM_WMMALoadOp<"wmma.m16n16k16.load.b.f16.row.stride">{
+
+  string llvmBuilder = [{
+    $res = createNvvmIntrinsicCall(
+      builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_load_b_f16_row_stride, $args);
+  }];
+
+  string opDescription = [{
+    Example:
+
+    ```mlir
+    %2 = nvvm.wmma.m16n16k16.load.b %0, %1 : !llvm.ptr<i32, 3>, !llvm.i32 ->
+    !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>,
+    vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>
+    ```
+  }];
+
+  let description = !strconcat(baseDescription, opDescription);
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def NVVM_WMMALoadCOp :
+  NVVM_WMMALoadOp<"wmma.m16n16k16.load.c.f16.row.stride">{
+  string llvmBuilder = [{
+    $res = createNvvmIntrinsicCall(
+      builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_load_c_f16_row_stride, $args);
+  }];
+
+  string opDescription = [{
+    Example:
+
+    ```mlir
+    %2 = nvvm.wmma.m16n16k16.load.c %0, %1 : !llvm.ptr<i32, 3>, !llvm.i32 ->
+    !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>
+    ```
+  }];
+  
+  let description = !strconcat(baseDescription, opDescription);
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def NVVM_WMMAStoreOp :
+  NVVM_Op<"wmma.m16n16k16.store.d.f16.row.stride">,
+  Arguments<(ins Variadic<LLVM_Type>:$args)>{
+  string llvmBuilder = [{
+        createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_store_d_f16_row_stride, $args);
+  }];
+
+  let summary = "Warp synchronous matrix store";
+
+  let description = [{
+    The `nvvm.wmma.m16n16k16.store` operation stores a matrix collectively using
+    all the threads in a warp.
+
+    The operation takes as arguments the address to where the matrix elements are
+    to be stored, a stride and the elements to store, held by the current thread.
+    The stride argument represents the leading dimension of the destination matrix.
+    The address and the stride are required to be the same across all threads in the
+    warp.
+
+    This op is meant to be used along with `nvvm.wmma.m16n16k16.load` and
+    `nvvm.wmma.m16n16k16.mma`.
+
+    Example:
+
+    ```mlir
+    nvvm.wmma.m16n16k16.store %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10 :
+    !llvm.ptr<i32, 3>, !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>,
+    vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>,
+    !llvm.i32
+    ```
+  }];
+
+  let assemblyFormat = "$args attr-dict `:` type($args)";
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def NVVM_WMMAMmaOp :
+  NVVM_Op<"wmma.m16n16k16.mma.row.row.f16.f16">,
+  Results<(outs LLVM_AnyStruct:$res)>,
+  Arguments<(ins Variadic<LLVM_Type>:$args)>{
+  string llvmBuilder = [{
+    $res = createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f16_f16, $args);
+  }];
+
+  let summary = "Warp synchronous matrix-multiply accumulate using tensor cores.";
+
+  let description = [{
+    The `nvvm.wmma.m16n16k16.mma` operation performs a matrix-multiply accumulate
+    (mma) operation using all the threads in a warp.
+
+    The operation performed is represented as `D = A * B + C`. The operation takes
+    as arguments the elements of the matrices `A`, `B`, `C` and `D`, held by the
+    current thread. The op returns a LLVM struct which holds a part of the result
+    held by the current thread.
+
+    This op is meant to be used along with `nvvm.wmma.m16n16k16.load` and `nvvm.wmma.
+    m16n16k16.store`.
+
+    Example:
+
+    ```mlir
+    %20 = nvvm.wmma.m16n16k16.mma %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10, %11, %12,
+    %13, %14, %15, %16, %17, %18, %19 : vector<2xf16> -> !llvm.struct<(vector<2xf16>,
+    vector<2xf16>, vector<2xf16>, vector<2xf16>)> 
+    ```
+  }];
+
+  let parser = [{
+    SmallVector<OpAsmParser::OperandType, 4> operands;
+    ::llvm::SMLoc operandsLoc;
+    Type operandType;
+    Type resType;
+
+    operandsLoc = parser.getCurrentLocation();
+    if (parser.parseOperandList(operands)
+    || parser.parseOptionalAttrDict(result.attributes)
+    || parser.parseColon()
+    || parser.parseType(operandType)
+    || parser.parseArrow())
+      return failure();
+
+    unsigned numOperands = operands.size();
+    SmallVector<Type> operandTypes(numOperands, operandType);
+    if (parser.parseType(resType))
+      return failure();
+    result.addTypes(resType);
+    if (parser.resolveOperands(operands, operandTypes, operandsLoc, result.operands))
+      return failure();
+    return success();
+  }];
+
+  let printer = [{
+    p << getOperationName();
+    p << ' ';
+    p << args();
+    p.printOptionalAttrDict(getAttrs(), {});
+    p << " : ";
+    p << getOperation()->getOperand(0).getType();
+    p << ' ' << "->";
+    p << ' ';
+    p << ::llvm::ArrayRef<::mlir::Type>(res().getType());
+  }];
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
 #endif // NVVMIR_OPS

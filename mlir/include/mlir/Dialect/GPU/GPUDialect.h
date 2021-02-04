@@ -43,6 +43,68 @@ public:
   using Base::Base;
 };
 
+/// MMAFragmentType storage and uniquing.
+struct MMAFragmentStorageType : public TypeStorage {
+  MMAFragmentStorageType(int64_t size, Type elementType)
+      : size(size), elementType(elementType) {}
+
+  /// The hash key for uniquing.
+  using KeyTy = std::pair<int64_t, Type>;
+  bool operator==(const KeyTy &key) const {
+    return key == KeyTy(size, elementType);
+  }
+
+  /// Construction.
+  static MMAFragmentStorageType *construct(TypeStorageAllocator &allocator,
+                                           const KeyTy &key) {
+    return new (allocator.allocate<MMAFragmentStorageType>())
+        MMAFragmentStorageType(key.first, key.second);
+  }
+
+  /// Number of elements held in the fragment.
+  int64_t size;
+
+  /// Element type of elements held in the fragment.
+  Type elementType;
+};
+
+/// MMAFragment represents a fragment or collection of elements held by a thread
+/// for matrix-matrix multiply accumulate operations. MMAFragments are taken as
+/// direct operands by these operations and are also produced as results. There
+/// fragments are meant to reside in the registers. A limited number of
+/// pointwise operations can be performed on these fragments, i.e., operations
+/// which operate uniformly on all the elements in the fragment and do not
+/// change the order of matrix elements in the fragments. The above conditions
+/// exist because the layout of matrix elemnets inside the fragment is opaque
+/// i.e., the elements may be present in the fragment in any order.
+class MMAFragmentType
+    : public Type::TypeBase<MMAFragmentType, Type, MMAFragmentStorageType> {
+public:
+  using Base::Base;
+
+  /// Get MMAFragmentType and verify construction Invariants.
+  static MMAFragmentType get(int64_t shape, Type elementType);
+
+  /// Get MMAFragmentType at a particular location and verify construction
+  /// Invariants.
+  static MMAFragmentType getChecked(Location loc, int64_t shape,
+                                    Type elementType);
+
+  /// Check if a type is valid a MMAFragmentType elementType.
+  static bool isValidElementType(Type elementType);
+
+  /// Verify that shape and elementType are actually allowed for the
+  /// MMAFragmentType.
+  static LogicalResult verifyConstructionInvariants(Location loc, int64_t shape,
+                                                    Type elementType);
+
+  /// Get size of MMAFragment in number of elements.
+  int64_t getSize() const;
+
+  /// Get elementType of a single element in MMAFragment.
+  Type getElementType() const;
+};
+
 // Adds a `gpu.async.token` to the front of the argument list.
 void addAsyncDependency(Operation *op, Value token);
 

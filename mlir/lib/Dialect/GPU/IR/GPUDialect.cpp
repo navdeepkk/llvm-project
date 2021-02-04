@@ -29,8 +29,57 @@ using namespace mlir;
 using namespace mlir::gpu;
 
 //===----------------------------------------------------------------------===//
+// MMAFragmentType
+//===----------------------------------------------------------------------===//
+
+MMAFragmentType MMAFragmentType::get(int64_t size, Type elementType) {
+  return Base::get(elementType.getContext(), size, elementType);
+}
+
+MMAFragmentType MMAFragmentType::getChecked(Location loc, int64_t size,
+                                            Type elementType) {
+  return Base::getChecked(loc, size, elementType);
+}
+
+int64_t MMAFragmentType::getSize() const { return getImpl()->size; }
+
+Type MMAFragmentType::getElementType() const { return getImpl()->elementType; }
+
+bool MMAFragmentType::isValidElementType(Type elementType) {
+
+  if (auto vectorElemType = elementType.dyn_cast<VectorType>())
+    return vectorElemType.getRank() == 1 && vectorElemType.getDimSize(0) == 2;
+  else
+    return false;
+}
+
+LogicalResult MMAFragmentType::verifyConstructionInvariants(Location loc,
+                                                            int64_t size,
+                                                            Type elementType) {
+  if (size <= 0)
+    return emitError(loc, "MMAFragmentType size must be atleast one");
+
+  if (!MMAFragmentType::isValidElementType(elementType))
+    return emitError(loc, "MMAFragmentType elements must be vector<2xf16>");
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // GPUDialect
 //===----------------------------------------------------------------------===//
+
+/// GPU memory space identifiers.
+enum GPUMemorySpace {
+  /// Generic memory space identifier.
+  kGenericMemorySpace = 0,
+
+  /// Global memory space identifier.
+  kGlobalMemorySpace = 1,
+
+  /// Shared memory space identifier.
+  kSharedMemorySpace = 3
+};
 
 bool GPUDialect::isKernel(Operation *op) {
   UnitAttr isKernelAttr = op->getAttrOfType<UnitAttr>(getKernelFuncAttrName());
@@ -39,6 +88,7 @@ bool GPUDialect::isKernel(Operation *op) {
 
 void GPUDialect::initialize() {
   addTypes<AsyncTokenType>();
+  addTypes<MMAFragmentType>();
   addOperations<
 #define GET_OP_LIST
 #include "mlir/Dialect/GPU/GPUOps.cpp.inc"
@@ -56,6 +106,29 @@ Type GPUDialect::parseType(DialectAsmParser &parser) const {
   if (keyword == "async.token")
     return AsyncTokenType::get(context);
 
+  if (keyword == "mmafragment") {
+    llvm::SMLoc beginLoc = parser.getNameLoc();
+
+    // Parse '<'.
+    if (parser.parseLess())
+      return nullptr;
+
+    // Parse the size and elementType.
+    int64_t size;
+    VectorType elementType;
+    if (parser.parseInteger(size) || parser.parseComma() ||
+        parser.parseType(elementType)) {
+      return nullptr;
+    }
+
+    // Parse '>'.
+    if (parser.parseGreater())
+      return nullptr;
+
+    return MMAFragmentType::getChecked(parser.getEncodedSourceLoc(beginLoc),
+                                       size, elementType);
+  }
+
   parser.emitError(parser.getNameLoc(), "unknown gpu type: " + keyword);
   return Type();
 }
@@ -63,6 +136,10 @@ Type GPUDialect::parseType(DialectAsmParser &parser) const {
 void GPUDialect::printType(Type type, DialectAsmPrinter &os) const {
   TypeSwitch<Type>(type)
       .Case<AsyncTokenType>([&](Type) { os << "async.token"; })
+      .Case<MMAFragmentType>([&](MMAFragmentType fragTy) {
+        os << "mmafragment<" << fragTy.getSize() << ", "
+           << fragTy.getElementType() << ">";
+      })
       .Default([](Type) { llvm_unreachable("unexpected 'gpu' type kind"); });
 }
 
@@ -138,7 +215,8 @@ LogicalResult GPUDialect::verifyOperationAttribute(Operation *op,
   return walkResult.wasInterrupted() ? failure() : success();
 }
 
-template <typename T> static LogicalResult verifyIndexOp(T op) {
+template <typename T>
+static LogicalResult verifyIndexOp(T op) {
   auto dimension = op.dimension();
   if (dimension != "x" && dimension != "y" && dimension != "z")
     return op.emitError("dimension \"") << dimension << "\" is invalid";
@@ -883,6 +961,91 @@ static void printAsyncDependencies(OpAsmPrinter &printer, Operation *op,
   printer << "[";
   llvm::interleaveComma(asyncDependencies, printer);
   printer << "]";
+}
+
+//===----------------------------------------------------------------------===//
+// GPU_SubgroupMmaLoadMatrixOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verify(SubgroupMmaLoadMatrixOp op) {
+  auto srcType = op.srcMemref().getType();
+  auto srcMemrefType = srcType.cast<MemRefType>();
+  auto srcMemSpace = srcMemrefType.getMemorySpace();
+
+  if (!srcMemrefType.getAffineMaps().empty() &&
+      !srcMemrefType.getAffineMaps().front().isIdentity())
+    return op.emitError("expected identity layout map for source memref");
+
+  if (srcMemSpace != kGenericMemorySpace && srcMemSpace != kSharedMemorySpace &&
+      srcMemSpace != kGlobalMemorySpace)
+    return op.emitError(
+        "source memorySpace kGenericMemorySpace, kSharedMemorySpace or "
+        "kGlobalMemorySpace only allowed");
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// GPU_SubgroupMmaStoreMatrixOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verify(SubgroupMmaStoreMatrixOp op) {
+  auto srcType = op.src().getType();
+  auto dstType = op.dstMemref().getType();
+  auto srcFragType = srcType.cast<gpu::MMAFragmentType>();
+  auto dstMemrefType = dstType.cast<MemRefType>();
+  auto dstMemSpace = dstMemrefType.getMemorySpace();
+
+  if (!dstMemrefType.getAffineMaps().empty() &&
+      !dstMemrefType.getAffineMaps().front().isIdentity())
+    return op.emitError("expected identity layout map for destination memref");
+
+  if (dstMemSpace != kGenericMemorySpace && dstMemSpace != kSharedMemorySpace &&
+      dstMemSpace != kGlobalMemorySpace)
+    return op.emitError(
+        "destination memorySpace of kGenericMemorySpace, "
+        "kGlobalMemorySpace or kSharedMemorySpace only allowed");
+
+  if (srcFragType.getSize() != 4)
+    return op.emitError(
+        "operand should be of type !gpu.mmafragment<4xvector<2xf16>>");
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// GPU_SubgroupMmaComputeOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verify(SubgroupMmaComputeOp op) {
+  enum OperandMap { A, B, C };
+  SmallVector<MMAFragmentType, 3> opTypes;
+  SmallVector<Type, 3> elemTypes;
+
+  auto populateOpInfo = [&opTypes, &elemTypes, &op]() {
+    opTypes.push_back(op.opA().getType().cast<MMAFragmentType>());
+    opTypes.push_back(op.opB().getType().cast<MMAFragmentType>());
+    opTypes.push_back(op.opC().getType().cast<MMAFragmentType>());
+
+    for (MMAFragmentType opType : opTypes) {
+      elemTypes.push_back(opType.getElementType());
+    }
+  };
+  populateOpInfo();
+
+  auto isValidElementType = [](Type &elemType, MMAFragmentType &fragTy,
+                               unsigned numElems) {
+    return fragTy.getSize() == numElems;
+  };
+
+  if (!isValidElementType(elemTypes[A], opTypes[A], 8) ||
+      !isValidElementType(elemTypes[B], opTypes[B], 8) ||
+      !isValidElementType(elemTypes[C], opTypes[C], 4))
+    return op.emitError(
+        "A and B must be of type !gpu.mmafragment<8xvector<2xf16>> and C "
+        "must of type !gpu.mmafragment<4xvector<2xf16>>");
+
+  return success();
 }
 
 #include "mlir/Dialect/GPU/GPUOpInterfaces.cpp.inc"

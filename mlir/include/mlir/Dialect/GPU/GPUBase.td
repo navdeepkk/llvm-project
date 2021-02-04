@@ -57,6 +57,16 @@ def GPU_AsyncToken : DialectType<
   GPU_Dialect, CPred<"$_self.isa<::mlir::gpu::AsyncTokenType>()">, "async token type">,
              BuildableType<"mlir::gpu::AsyncTokenType::get($_builder.getContext())">;
 
+def IsMMAFragmentTypePred : CPred<"$_self.isa<::mlir::gpu::MMAFragmentType>()">;
+
+def GPU_MMAFragment : DialectType<
+  GPU_Dialect, IsMMAFragmentTypePred, "mmafragment type">;
+
+class MMAFragmentOf<list<Type> allowedTypes> :
+  ContainerType<AnyTypeOf<allowedTypes>, IsMMAFragmentTypePred,
+  "$_self.cast<::mlir::gpu::MMAFragmentType>().getElementType()",
+  "gpu.mmafragment", "::mlir::gpu::MMAFragmentType">;
+
 def GPU_AsyncOpInterface : OpInterface<"AsyncOpInterface"> {
   let description = [{
     Interface for GPU operations that execute asynchronously on the device.
@@ -100,6 +110,36 @@ def GPU_AsyncOpInterface : OpInterface<"AsyncOpInterface"> {
       }]
     >
   ];
+}
+
+// Cases of the String enum Attribute for SubgroupMmaOpLayout, representing
+// the layouts of the operands supported by the ops that use this attribute.
+def RowMajor: StrEnumAttrCase<"RowMajor", 0>;
+def ColMajor: StrEnumAttrCase<"ColMajor", 1>;
+
+// Specifies a String enum Attribute for Warp wide matrix operations,
+// representing the layout of respective operands GPU Dialect. The layout
+// later governs the lowerings to appropriate intrinsics.
+def SubgroupMmaOpLayout: StrEnumAttr<"Layout", "Specifies whether op is row/col major",
+                           [RowMajor, ColMajor]> {
+  let stringToSymbolFnName = "LayoutStrToEnum";
+  let symbolToStringFnName = "EnumToLayoutStr";
+}
+
+// Cases of the String enum Attribute for SubgroupMmaOperand, representing
+// the operand tags supported by the ops that use this attribute.
+def DOp: StrEnumAttrCase<"DOp", 0>;
+def Aop: StrEnumAttrCase<"AOp", 1>;
+def Bop: StrEnumAttrCase<"BOp", 2>;
+def Cop: StrEnumAttrCase<"COp", 3>;
+
+// Specifies a String enum Attribute for Warp wide matrix operations,
+// representing the operands for the operations. The operands later
+// govern the lowerings to appropriate intrinsics.
+def SubgroupMmaOperand: StrEnumAttr<"WmmaOp", "Specifes which subgroup operand is this",
+                           [DOp, Aop, Bop, Cop]> {
+  let stringToSymbolFnName = "OpStrToEnum";
+  let symbolToStringFnName = "EnumToOpStr";
 }
 
 #endif // GPU_BASE
