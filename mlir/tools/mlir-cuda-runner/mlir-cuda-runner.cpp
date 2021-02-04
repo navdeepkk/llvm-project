@@ -105,6 +105,15 @@ OwnedBlob compilePtxToCubin(const std::string ptx, Location loc,
   return result;
 }
 
+static llvm::cl::opt<std::string>
+    clSMVersion("sm", llvm::cl::desc("SM version to target"),
+                llvm::cl::init("sm_35"));
+
+static llvm::cl::opt<unsigned>
+    clIndexWidth("index-bitwidth",
+                 llvm::cl::desc("Bitwidth of index type to use for lowering"),
+                 llvm::cl::init(32));
+
 static LogicalResult runMLIRPasses(ModuleOp m) {
   PassManager pm(m.getContext());
   applyPassManagerCLOptions(pm);
@@ -113,10 +122,10 @@ static LogicalResult runMLIRPasses(ModuleOp m) {
   pm.addPass(createGpuKernelOutliningPass());
   auto &kernelPm = pm.nest<gpu::GPUModuleOp>();
   kernelPm.addPass(createStripDebugInfoPass());
-  kernelPm.addPass(createLowerGpuOpsToNVVMOpsPass());
+  kernelPm.addPass(createLowerGpuOpsToNVVMOpsPass(clIndexWidth.getValue()));
   kernelPm.addPass(createConvertGPUKernelToBlobPass(
       translateModuleToNVVMIR, compilePtxToCubin, "nvptx64-nvidia-cuda",
-      "sm_35", "+ptx60", gpuBinaryAnnotation));
+      clSMVersion.getValue(), "+ptx60", gpuBinaryAnnotation));
   pm.addPass(createGpuToLLVMConversionPass(gpuBinaryAnnotation));
 
   return pm.run(m);
