@@ -26,6 +26,9 @@
 #include "../GPUCommon/IndexIntrinsicsOpLowering.h"
 #include "../GPUCommon/OpToFuncCallLowering.h"
 #include "../PassDetail.h"
+#include "WmmaLoadOptoNvvmLowering.h"
+#include "WmmaMmaOptoNvvmLowering.h"
+#include "WmmaStoreOptoNvvmLowering.h"
 
 using namespace mlir;
 
@@ -122,6 +125,17 @@ struct LowerGpuOpsToNVVMOpsPass
       return converter.convertType(MemRefType::Builder(type).setMemorySpace(0));
     });
 
+    converter.addConversion([&](gpu::MMAFragmentType type) -> Type {
+      VectorType vecTy = type.getElementType().cast<VectorType>();
+      unsigned vecSize = vecTy.getDimSize(0);
+      Type vec = VectorType::get(vecSize, FloatType::getF16(&getContext()));
+      unsigned size = type.getSize();
+      SmallVector<Type, 8> elements(size, vec);
+      auto structType =
+          LLVM::LLVMStructType::getLiteral(&getContext(), elements);
+      return structType;
+    });
+
     OwningRewritePatternList patterns, llvmPatterns;
 
     // Apply in-dialect lowering first. In-dialect lowering will replace ops
@@ -171,6 +185,9 @@ void mlir::populateGpuToNVVMConversionPatterns(
               // attributions since NVVM models it as `alloca`s in the default
               // memory space and does not support `alloca`s with addrspace(5).
               GPUFuncOpLowering<0>>(converter);
+  patterns.insert<WmmaLoadOptoNVVMLowering>(converter);
+  patterns.insert<WmmaMmaOptoNVVMLowering>(converter);
+  patterns.insert<WmmaStoreOptoNVVMLowering>(converter);
   patterns.insert<OpToFuncCallLowering<AbsFOp>>(converter, "__nv_fabsf",
                                                 "__nv_fabs");
   patterns.insert<OpToFuncCallLowering<AtanOp>>(converter, "__nv_atanf",
