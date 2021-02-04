@@ -254,6 +254,10 @@ llvm::Value *createIntrinsicCall(llvm::IRBuilderBase &builder,
                                  llvm::Intrinsic::ID intrinsic,
                                  ArrayRef<llvm::Value *> args = {},
                                  ArrayRef<llvm::Type *> tys = {});
+
+llvm::Value *createNvvmIntrinsicCall(llvm::IRBuilderBase &builder,
+                                            llvm::Intrinsic::ID intrinsic,
+                                            ArrayRef<llvm::Value *> args = {});
 } // namespace detail
 
 } // namespace LLVM
