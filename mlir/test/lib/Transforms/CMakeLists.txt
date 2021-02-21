@@ -34,6 +34,7 @@ add_mlir_library(MLIRTestTransforms
   TestMemRefStrideCalculation.cpp
   TestSCFUtils.cpp
   TestSparsification.cpp
+  TestSpecializeAffineForWMMA.cpp
   TestVectorTransforms.cpp
 
   EXCLUDE_FROM_LIBMLIR
