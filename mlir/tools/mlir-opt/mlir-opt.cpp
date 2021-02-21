@@ -92,6 +92,7 @@ void registerTestPreparationPassWithAllowedMemrefResults();
 void registerTestRecursiveTypesPass();
 void registerTestSCFUtilsPass();
 void registerTestSparsification();
+void registerTestSpecializeAffineForWMMAPass();
 void registerTestVectorConversions();
 } // namespace test
 } // namespace mlir
@@ -162,6 +163,7 @@ void registerTestPasses() {
   test::registerTestRecursiveTypesPass();
   test::registerTestSCFUtilsPass();
   test::registerTestSparsification();
+  test::registerTestSpecializeAffineForWMMAPass();
   test::registerTestVectorConversions();
 }
 #endif
