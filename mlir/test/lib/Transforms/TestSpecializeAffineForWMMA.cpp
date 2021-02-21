@@ -89,14 +89,14 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
   // Find the different type of loops. When mapped to GPU there may be three
   // different types of loops present. 1.) Inter ThreadBlock-tile loops, 2.)
   // Inter Warp-tile loops 3.) Intra Warp-tile loops.
-  SmallVector<Value> outermostloopsIVs;
+  SmallVector<Value> outerloopsIVs;
   for (auto loop = computeLoops.begin(),
             e = computeLoops.begin() + kNumIntialLoops;
        loop < e; ++loop) {
-    outermostloopsIVs.push_back(loop->getInductionVar());
+    outerloopsIVs.push_back(loop->getInductionVar());
   }
 
-  llvm::outs() << outermostloopsIVs.size() << "\n";
+  llvm::outs() << outerloopsIVs.size() << "\n";
   // By inspecting the upper bounds and lower bounds of all the loops we can
   // find out which loops were actually tiled. If the lower or upper bound of a
   // loop depends on any of the loopsIVs of any of the outermost loops then that
@@ -116,7 +116,15 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
                       loop->getUpperBoundOperands().end());
 
     // The loops must be dependent from the outermost to the innermost loops.
-    llvm::is_contained(IVOperands, )
+    bool foundDependentLoopIV = false;
+    for(auto operand : IVOperands){
+      if(llvm::is_contained(operand, outerloopsIVs))
+	foundDependentLoopIV = true;
+    }
+
+    if(foundDependentLoopIV){
+
+    }
   }
 }
 
