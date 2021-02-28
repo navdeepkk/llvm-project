@@ -14,6 +14,7 @@
 #include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/Vector/VectorOps.h"
+#include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/Transforms/LoopUtils.h"
 
 using namespace mlir;
@@ -220,7 +221,10 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
 
   SmallVector<Value> newLoadOps;
   SmallVector<Operation *> movableOps;
+  SmallVector<SmallVector<Value>> newIndices;
+  SmallVector<Operation *> removableOps;
 
+  // Check if the load/store op pairs are hoistable.
   for (auto &p : loadStoreOps) {
     SmallVector<AffineMap> indexMaps;
     SmallVector<SmallVector<Value>> mapOprs;
@@ -243,6 +247,9 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
             b.create<AffineApplyOp>(forOp.getLoc(), affMap, oprs));
       }
 
+      // Store these new indices for use later, while moving the store ops.
+      newIndices.push_back(indices);
+
       // Create new ops. These ops will be used as iter_args for the forOp.
       auto origLoadop = cast<gpu::SubgroupMmaLoadMatrixOp>(p.first);
       newLoadOps.push_back(b.create<gpu::SubgroupMmaLoadMatrixOp>(
@@ -259,23 +266,81 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
   newOperands.append(newLoadOps);
   forOp->setOperands(newOperands);
 
-  // Add newly created ops as arguments to the BB containing the loop body.
+  OperationState result(forOp.getLoc(), forOp->getName());
+
+  // Add newly created ops as arguments to the basic block containing the loop
+  // body.
   SmallVector<BlockArgument> newArgs;
-  for(auto newOp : newLoadOps){
+  for (auto newOp : newLoadOps) {
     newArgs.push_back(loopBody.front().addArgument(newOp.getType()));
   }
 
-  llvm::outs()<<"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
-  llvm::outs() << forOp.getNumRegionIterArgs() << "\n";
-  llvm::outs() << forOp.getNumIterOperands() << "\n";
-  llvm::outs() << movableOps.size() << "\n";
-  llvm::outs() << newOperands.size() << "\n";
+  // llvm::outs() << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+  // llvm::outs() << forOp.getNumRegionIterArgs() << "\n";
+  // llvm::outs() << forOp.getNumIterOperands() << "\n";
+  // llvm::outs() << movableOps.size() << "\n";
+  // llvm::outs() << newOperands.size() << "\n";
 
-  for(unsigned i = 0, e = movableOps.size(); i < e; ++i){
+  // Set the newly created ops as iter_args for the forOp.
+  for (unsigned i = 0, e = movableOps.size(); i < e; ++i) {
     movableOps[i]->getResult(0).replaceAllUsesWith(newArgs[i]);
   }
 
-  // Set the newly created ops as iter_args for the forOp.
+  // Create a new affine forOp with body and clone the ops from the original
+  // nest to this loop and then erase the original nest.
+  b.setInsertionPointAfter(forOp);
+  AffineForOp newForop = b.create<AffineForOp>(
+      forOp.getLoc(), forOp.getLowerBoundOperands(), forOp.getLowerBoundMap(),
+      forOp.getUpperBoundOperands(), forOp.getUpperBoundMap(), forOp.getStep(),
+      forOp.getIterOperands(),
+      [&](OpBuilder &builder, Location loc, Value iv, ValueRange iterArgs) {
+        builder.create<AffineYieldOp>(loc, iterArgs);
+      });
+
+  // Clone the body of the original forop into the newly create for op. First
+  // add the iterArgs and loopIV into the clonigMap.
+  BlockAndValueMapping mapping;
+  mapping.map(forOp.getInductionVar(), newForop.getInductionVar());
+  mapping.map(forOp.getRegionIterArgs(), newForop.getRegionIterArgs());
+
+  b.setInsertionPointToStart(&newForop.getLoopBody().front());
+
+  SmallVector<gpu::SubgroupMmaStoreMatrixOp> newStoreOps;
+  for (auto &op : forOp.getLoopBody().front().without_terminator()) {
+    Operation *clonedOp = b.clone(op, mapping);
+    if (auto storeOp = dyn_cast<gpu::SubgroupMmaStoreMatrixOp>(clonedOp))
+      newStoreOps.push_back(storeOp);
+  }
+
+  // Erase the original for op.
+  forOp.erase();
+
+  // Set the correct operands for the yield op.
+  SmallVector<Value> toYield;
+  AffineYieldOp yieldOp =
+      dyn_cast<AffineYieldOp>(newForop.getLoopBody().front().back());
+
+  for (auto op : newStoreOps) {
+    toYield.push_back(op.src());
+  }
+  yieldOp->setOperands(toYield);
+
+  // Place newly created storeOps just outside the for ops body and set their
+  // operands to be the ops yeileded by the newly created AffineForOp.
+  SmallVector<Value> newForOpRes(newForop.getResults());
+  b.setInsertionPointAfter(newForop);
+
+  for (auto resSrc : llvm::zip(newForOpRes, newStoreOps, newIndices)) {
+    Value newRes;
+    gpu::SubgroupMmaStoreMatrixOp newStoreOp;
+    SmallVector<Value> indices;
+    std::tie(newRes, newStoreOp, indices) = resSrc;
+    b.create<gpu::SubgroupMmaStoreMatrixOp>(newForop.getLoc(), newRes,
+                                            newStoreOp.dstMemref(), indices,
+                                            newStoreOp.leadDimension());
+  }
+
+  // newForop->getParentOfType<FuncOp>().dump();
 }
 
 void TestSpecializeAffineForWMMA::runOnFunction() {
@@ -480,6 +545,7 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
   // processed.
   // funcOp->walk([&](AffineForOp forOp) { moveLoopInvariantCode(forOp, b); });
   moveLoopInvariantCode(innermostLoop, b);
+  // moveLoopInvariantCode(computeLoops[4], b);
 
   // llvm::DenseMap<Operation *, bool> isInnermostLoopOp;
   // Block &innermostLoopBody = innermostLoop.getLoopBody().front();
@@ -540,8 +606,7 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
   // computeLoops[4]->getOperand(1).dump();
   // b.create<ConstantIndexOp>(loc, 3);
   // b.create<AffineYieldOp>(loc, toYield);
-  // AffineYieldOp yieldOp =
-  //    dyn_cast<AffineYieldOp>(computeLoops[5].getLoopBody().front().back());
+  // AffineYieldOp yieldOp = dyn_cast<AffineYieldOp>(innermostLoopBody.back());
   // yieldOp->setOperands(toYield);
 }
 
