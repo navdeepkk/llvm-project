@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
+// This file contains specilaization patterns for matmul targetting tensor cores
+// on Nvidia GPUs.
 //
 //===----------------------------------------------------------------------===//
 
@@ -29,16 +31,43 @@ struct TestSpecializeAffineForWMMA
     registry.insert<gpu::GPUDialect, mlir::vector::VectorDialect>();
   }
 
-  // TODO: This should at the end be some kind of structure which has all the
-  // operand numbers according to the version of the wmma op being used. Perhaps
-  // it should be moved into a different header file.
+  /// Order of loops required in the input IR in their relative order.
+  enum LoopStructure {
+    TbI,
+    TbJ,
+    TbK,
+    WarpI,
+    WarpJ,
+    WarpK,
+    ThreadI,
+    ThreadJ,
+    ThreadK
+  };
+
+  /// String Array representing the standard operands of matmul.
   std::string ops[4] = {"AOp", "BOp", "COp", "DOp"};
-  enum WmmaOps { AOp, BOp, COp, DOp };
-  unsigned numElems[4] = {8, 8, 4, 4};
+
+  /// Constant representing the maximum number of tiled loops that can be
+  /// present in the input IR.
   constexpr static unsigned kMaxTiledLoops = 9;
+
+  /// Constant representing the number of loops in untiled matmul.
   constexpr static unsigned kNumIntialLoops = 3;
+
+  // TODO: This should be in some kind of structure which has all the operand
+  // numbers according to the version of the wmma op being used. Perhaps
+  // it should be moved into a different header file.
+  /// Array representing the number of elements in the mmaFragment corresponding
+  /// to a particular operand.
+  unsigned numElems[4] = {8, 8, 4, 4};
+
+  /// Constant representing the shape of WMMA op in M dimension.
   constexpr static unsigned kWMMAM = 16;
+
+  /// Constant representing the shape of WMMA op in N dimension.
   constexpr static unsigned kWMMAN = 16;
+
+  /// Constant representing the shape of WMMA op in K dimension.
   constexpr static unsigned kWMMAK = 16;
 };
 } // end anonymous namespace
@@ -89,15 +118,15 @@ void insepectTileStructure(SmallVector<AffineForOp> &computeLoops,
        loop < e; ++loop) {
     if (!loop->hasConstantBounds()) {
       // Insert lower/upper bound operands.
-      SmallVector<Value> IVOperands;
-      IVOperands.insert(IVOperands.end(), loop->getLowerBoundOperands().begin(),
+      SmallVector<Value> ivOperands;
+      ivOperands.insert(ivOperands.end(), loop->getLowerBoundOperands().begin(),
                         loop->getLowerBoundOperands().end());
-      IVOperands.insert(IVOperands.end(), loop->getUpperBoundOperands().begin(),
+      ivOperands.insert(ivOperands.end(), loop->getUpperBoundOperands().begin(),
                         loop->getUpperBoundOperands().end());
 
       // The loops must be dependent from the outermost to the innermost loops.
       bool foundDependentLoopIV = false;
-      for (auto operand : IVOperands) {
+      for (auto operand : ivOperands) {
         // llvm::outs()<<"checking with "<<curMapStage<<"\n";
         if (operand == loopsIVs[curMapStage] ||
             operand == loopsIVs[curMapStage +
@@ -114,12 +143,6 @@ void insepectTileStructure(SmallVector<AffineForOp> &computeLoops,
   }
 }
 
-// Checks whether the given op can be hoisted by checking that
-// - the op and any of its contained operations do not depend on SSA values
-//   defined inside of the loop (by means of calling definedOutside).
-// - the op has no side-effects. If sideEffecting is Never, sideeffects of
-// this
-//   op and its nested ops are ignored.
 bool canBeHoisted(Operation *op, AffineForOp forOp,
                   SmallVector<AffineMap> &affineMaps,
                   SmallVector<SmallVector<Value>> &mapOprs) {
@@ -171,22 +194,31 @@ bool canBeHoisted(Operation *op, AffineForOp forOp,
 void getRecursiveUses(
     Operation *source, Operation *op, Operation *target,
     SmallVector<std::pair<Operation *, Operation *>> &loadStoreOps) {
-  // llvm::outs()<<"called on\n";
+  // llvm::outs() << "getRecursiveUses called on\n";
+  // llvm::outs() << "source-----";
   // op->dump();
+  // llvm::outs() << "target-----";
   // target->dump();
+  // llvm::outs() << "\n\n";
   auto allUses = op->getUses();
   if (allUses.empty())
     return;
   for (auto &use : allUses) {
-    if (use.getOwner() == target) {
-      loadStoreOps.push_back(std::make_pair(source, target));
-    } else {
-      getRecursiveUses(source, use.getOwner(), target, loadStoreOps);
+    // Inspect ops wihtout any regions, i.e., avoid forops, ifops etc.
+    if (use.getOwner()->getNumRegions() == 0) {
+      if (use.getOwner() == target) {
+        loadStoreOps.push_back(std::make_pair(source, target));
+      } else {
+        getRecursiveUses(source, use.getOwner(), target, loadStoreOps);
+      }
     }
   }
 }
 
-void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
+void moveLoopInvariantCode(
+    AffineForOp forOp, OpBuilder &b,
+    SmallVector<std::pair<Operation *, Operation *>> &loadStoreOps) {
+  // forOp.dump();
   auto &loopBody = forOp.getLoopBody();
 
   SmallVector<gpu::SubgroupMmaLoadMatrixOp> loadOps;
@@ -200,10 +232,10 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
       storeOps.push_back(mmaOp);
   }
 
-  // Construct pairs of load/store ops which access the same positon
-  // in the same matrix. The implementaion is an O(n^3) approach in
-  // worst case.
-  SmallVector<std::pair<Operation *, Operation *>> loadStoreOps;
+  // llvm::outs() << "loadops found: " << loadOps.size() << "\n";
+  // llvm::outs() << "storeops found: " << storeOps.size() << "\n";
+  // Find pairs of load/stores such that the value being stored is somehow
+  // dependant on the load.
   for (auto loadOp : loadOps) {
     for (auto storeOp : storeOps) {
       getRecursiveUses(loadOp.getOperation(), loadOp.getOperation(),
@@ -211,6 +243,9 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
     }
   }
 
+  // If no load/store pair found, then return.
+  if (loadStoreOps.size() == 0)
+    return;
   // for (auto p : loadStoreOps) {
   //  llvm::outs() << "-----------------------------------------------------\n";
   //  p.first->dump();
@@ -220,14 +255,15 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
   // llvm::outs() << loadStoreOps.size() << "\n";
 
   SmallVector<Value> newLoadOps;
+  SmallVector<Operation *> newStoreOps;
   SmallVector<Operation *> movableOps;
   SmallVector<SmallVector<Value>> newIndices;
-  SmallVector<Operation *> removableOps;
 
   // Check if the load/store op pairs are hoistable.
   for (auto &p : loadStoreOps) {
     SmallVector<AffineMap> indexMaps;
     SmallVector<SmallVector<Value>> mapOprs;
+    // TODO: Insert check for storeOp also.
     if (canBeHoisted(p.first, forOp, indexMaps, mapOprs)) {
       movableOps.push_back(p.first);
       // llvm::outs() << "hoistable op: ";
@@ -259,6 +295,9 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
     }
   }
 
+  if (movableOps.size() == 0)
+    return;
+
   // Insert newly created ops as operands for the for op.
   SmallVector<Value> newOperands(forOp.getLowerBoundOperands());
   newOperands.append(forOp.getUpperBoundOperands().begin(),
@@ -278,7 +317,7 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
   // llvm::outs() << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
   // llvm::outs() << forOp.getNumRegionIterArgs() << "\n";
   // llvm::outs() << forOp.getNumIterOperands() << "\n";
-  // llvm::outs() << movableOps.size() << "\n";
+  // llvm::outs() <<"movabel ops ---"<< movableOps.size() << "\n";
   // llvm::outs() << newOperands.size() << "\n";
 
   // Set the newly created ops as iter_args for the forOp.
@@ -305,11 +344,11 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
 
   b.setInsertionPointToStart(&newForop.getLoopBody().front());
 
-  SmallVector<gpu::SubgroupMmaStoreMatrixOp> newStoreOps;
+  SmallVector<gpu::SubgroupMmaStoreMatrixOp> clonedStoreOps;
   for (auto &op : forOp.getLoopBody().front().without_terminator()) {
     Operation *clonedOp = b.clone(op, mapping);
     if (auto storeOp = dyn_cast<gpu::SubgroupMmaStoreMatrixOp>(clonedOp))
-      newStoreOps.push_back(storeOp);
+      clonedStoreOps.push_back(storeOp);
   }
 
   // Erase the original for op.
@@ -320,7 +359,7 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
   AffineYieldOp yieldOp =
       dyn_cast<AffineYieldOp>(newForop.getLoopBody().front().back());
 
-  for (auto op : newStoreOps) {
+  for (auto op : clonedStoreOps) {
     toYield.push_back(op.src());
   }
   yieldOp->setOperands(toYield);
@@ -329,18 +368,38 @@ void moveLoopInvariantCode(AffineForOp forOp, OpBuilder &b) {
   // operands to be the ops yeileded by the newly created AffineForOp.
   SmallVector<Value> newForOpRes(newForop.getResults());
   b.setInsertionPointAfter(newForop);
-
-  for (auto resSrc : llvm::zip(newForOpRes, newStoreOps, newIndices)) {
+  for (auto resSrc : llvm::zip(newForOpRes, clonedStoreOps, newIndices)) {
     Value newRes;
-    gpu::SubgroupMmaStoreMatrixOp newStoreOp;
+    gpu::SubgroupMmaStoreMatrixOp clonedStoreOp;
     SmallVector<Value> indices;
-    std::tie(newRes, newStoreOp, indices) = resSrc;
-    b.create<gpu::SubgroupMmaStoreMatrixOp>(newForop.getLoc(), newRes,
-                                            newStoreOp.dstMemref(), indices,
-                                            newStoreOp.leadDimension());
+    std::tie(newRes, clonedStoreOp, indices) = resSrc;
+    newStoreOps.push_back(b.create<gpu::SubgroupMmaStoreMatrixOp>(
+        newForop.getLoc(), newRes, clonedStoreOp.dstMemref(), indices,
+        clonedStoreOp.leadDimension()));
+    clonedStoreOp.erase();
+  }
+
+  // Update loadStoreOps to contain newly created load/store ops. Newly created
+  // load/store ops are always candidates for further movement.
+  loadStoreOps.clear();
+  for (auto lSPair : llvm::zip(newLoadOps, newStoreOps)) {
+    Value load;
+    Operation *store;
+    std::tie(load, store) = lSPair;
+    loadStoreOps.push_back(std::make_pair(load.getDefiningOp(), store));
   }
 
   // newForop->getParentOfType<FuncOp>().dump();
+  // llvm::outs() <<
+  // "------------------------------------------------------------"
+  //                "--------------------------\n";
+}
+
+void moveInvariantLoadStorePairs(FuncOp funcOp, OpBuilder b) {
+  SmallVector<std::pair<Operation *, Operation *>> loadStoreOps;
+  funcOp->walk([&](AffineForOp forOp) {
+    moveLoopInvariantCode(forOp, b, loadStoreOps);
+  });
 }
 
 void TestSpecializeAffineForWMMA::runOnFunction() {
@@ -496,7 +555,7 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
   }
 
   // Erase all the gathered ops.
-  for (auto op : toErase)
+  for (auto *op : toErase)
     op->erase();
 
   // Interchange the warp space loops with `k` loop.
@@ -538,76 +597,7 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
   // appropriate yield ops and also supplying loaded values back into the
   // invariant loop as iter_args. This would also require substituing the
   // usign values with the iter_arg.
-
-  // Do not use walk here, as we do not want to go into nested regions and
-  // hoist operations from there. These regions might have semantics unknown
-  // to this rewriting. If the nested regions are loops, they will have been
-  // processed.
-  // funcOp->walk([&](AffineForOp forOp) { moveLoopInvariantCode(forOp, b); });
-  moveLoopInvariantCode(innermostLoop, b);
-  // moveLoopInvariantCode(computeLoops[4], b);
-
-  // llvm::DenseMap<Operation *, bool> isInnermostLoopOp;
-  // Block &innermostLoopBody = innermostLoop.getLoopBody().front();
-
-  // for (auto op = innermostLoopBody.begin(), e = innermostLoopBody.end();
-  //     op != e; ++op) {
-  //  isInnermostLoopOp[&*op] = false;
-  //}
-
-  // Move loop invariant code out of the innermostLoop
-  // funcOp.walk(
-  //    [&](AffineForOp forOp) { mlir::moveAffineLoopInvariantCode(forOp); });
-
-  //// Mark all loops that were moved out.
-  // for (auto op = innermostLoopBody.begin(), e = innermostLoopBody.end();
-  //     op != e; ++op) {
-  //  isInnermostLoopOp[&*op] = true;
-  //}
-
-  //// Gather all the operations in innermostLoop now to yeild them from the
-  //// innermost to warp space `j` loop.
-  // SmallVector<Value> newOperands;
-  // for (auto op : isInnermostLoopOp) {
-  //  if (op.second == false)
-  //    if (auto wmmaOp = dyn_cast<gpu::SubgroupMmaLoadMatrixOp>(op.first))
-  //      newOperands.push_back(wmmaOp);
-  //}
-
-  //// newOperands.push_back(computeLoops[5].getInductionVar());
-  //// for (auto op = innermostLoopBody.begin(), e = innermostLoopBody.end();
-  ////     op != e; ++op) {
-  ////  if (auto mmaOp = dyn_cast<gpu::SubgroupMmaComputeOp>(op))
-  ////    newOperands.push_back(mmaOp->getResult(0));
-  ////}
-
-  //// b.setInsertionPointToEnd(&computeLoops[4].getLoopBody().front());
-
-  // llvm::outs() << newOperands.size() << "\n";
-  //// computeLoops[4]->getParentOfType<FuncOp>().dump();
-  // computeLoops[4]->setOperands(newOperands);
-  // computeLoops[5]->setOperands(newOperands);
-
-  // Get all the MMA compute ops inside the innermost loops. The result of
-  // these ops are the ones that we want to yield and at the end WMMA store op
-  // will consume these ops.
-  // SmallVector<Value> toYield;
-  // for (auto &op : innermostLoopBody) {
-  //  if (auto wmmaOp = dyn_cast<gpu::SubgroupMmaComputeOp>(op))
-  //    toYield.push_back(wmmaOp->getResult(0));
-  //}
-  // llvm::outs() << toYield.size() << "\n";
-
-  // Set the innermostLoop to yeild the results of WMMA compute ops.
-
-  // TODO: REMOVE: comfirming if operands have been set or not.
-  // for (auto &ops : computeLoops[4]->getOpOperands())
-  //  ops.get().getDefiningOp()->dump();
-  // computeLoops[4]->getOperand(1).dump();
-  // b.create<ConstantIndexOp>(loc, 3);
-  // b.create<AffineYieldOp>(loc, toYield);
-  // AffineYieldOp yieldOp = dyn_cast<AffineYieldOp>(innermostLoopBody.back());
-  // yieldOp->setOperands(toYield);
+  moveInvariantLoadStorePairs(funcOp, b);
 }
 
 namespace mlir {
