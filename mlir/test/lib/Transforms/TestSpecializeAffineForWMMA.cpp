@@ -44,6 +44,9 @@ struct TestSpecializeAffineForWMMA
     ThreadK
   };
 
+  /// Enum containing GEMM operands, usefull in accessing certain containers.
+  enum WmmaOps { AOp, BOp, COp, DOp };
+
   /// String Array representing the standard operands of matmul.
   std::string ops[4] = {"AOp", "BOp", "COp", "DOp"};
 
@@ -127,7 +130,6 @@ void insepectTileStructure(SmallVector<AffineForOp> &computeLoops,
       // The loops must be dependent from the outermost to the innermost loops.
       bool foundDependentLoopIV = false;
       for (auto operand : ivOperands) {
-        // llvm::outs()<<"checking with "<<curMapStage<<"\n";
         if (operand == loopsIVs[curMapStage] ||
             operand == loopsIVs[curMapStage +
                                 TestSpecializeAffineForWMMA::kNumIntialLoops])
@@ -143,54 +145,54 @@ void insepectTileStructure(SmallVector<AffineForOp> &computeLoops,
   }
 }
 
+// Checks whether a given op is hoistable with respect to a forOp.
 bool canBeHoisted(Operation *op, AffineForOp forOp,
                   SmallVector<AffineMap> &affineMaps,
                   SmallVector<SmallVector<Value>> &mapOprs) {
-  //// Check that dependencies are defined outside of loop.
-  // if (!llvm::all_of(op->getOperands(), definedOutside))
-  //  return false;
-  // Check whether this op is side-effect free. If we already know that there
-  // can be no side-effects because the surrounding op has claimed so, we can
-  // (and have to) skip this step.
-  // bool isMovable = true;
-  if (auto memInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
-    if (auto mmaOp = dyn_cast<gpu::SubgroupMmaLoadMatrixOp>(op)) {
-      // Check if the indices of the mmaLoadOp have any dependency to an affine
-      // apply op.
-      for (auto &operand : mmaOp->getOpOperands()) {
-        if (auto defOp =
-                dyn_cast<AffineApplyOp>(operand.get().getDefiningOp())) {
-          // defOp.dump();
-          AffineMap inxMap = defOp.getAffineMap();
-          // llvm::outs()
-          //    << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
-          // inxMap.dump();
-          SmallVector<Value> mapOpr(defOp.getMapOperands());
-          fullyComposeAffineMapAndOperands(&inxMap, &mapOpr);
-          canonicalizeMapAndOperands(&inxMap, &mapOpr);
-          // llvm::outs()
-          //    << "-------------------------------------------------------\n";
-          // op->dump();
-          // inxMap.dump();
-          // for (auto op : mapOprs)
-          //  op.dump();
-          // After compostion check whether all the operands are independant of
-          // the surrounding AffineForOp.
-          if (llvm::all_of(mapOpr, [&](Value mapOpr) {
-                return mapOpr != forOp.getInductionVar();
-              })) {
-            affineMaps.push_back(inxMap);
-            mapOprs.push_back(mapOpr);
-          } else
-            return false;
-        }
+  auto isIndependentOfLoopIV = [&](MutableArrayRef<OpOperand> operands) {
+    for (auto &operand : operands) {
+      // TODO: Handle cases where the operands to the op may not be results of
+      // AffineApplyOp.
+      if (auto defOp = dyn_cast<AffineApplyOp>(operand.get().getDefiningOp())) {
+        // defOp.dump();
+        AffineMap inxMap = defOp.getAffineMap();
+        // llvm::outs()
+        //    << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+        // inxMap.dump();
+        SmallVector<Value> mapOpr(defOp.getMapOperands());
+        fullyComposeAffineMapAndOperands(&inxMap, &mapOpr);
+        canonicalizeMapAndOperands(&inxMap, &mapOpr);
+        // llvm::outs()
+        //    << "-------------------------------------------------------\n";
+        // op->dump();
+        // inxMap.dump();
+        // for (auto op : mapOprs)
+        //  op.dump();
+        // After compostion check whether all the operands are independant of
+        // the surrounding AffineForOp.
+        if (llvm::all_of(mapOpr, [&](Value mapOpr) {
+              return mapOpr != forOp.getInductionVar();
+            })) {
+          affineMaps.push_back(inxMap);
+          mapOprs.push_back(mapOpr);
+        } else
+          return false;
       }
     }
+    return true;
+  };
+
+  if (auto mmaOp = dyn_cast<gpu::SubgroupMmaLoadMatrixOp>(op)) {
+    // Check if the indices of the mmaLoadOp have any dependency to an affine
+    // apply op.
+    return isIndependentOfLoopIV(mmaOp->getOpOperands());
   }
 
-  return true;
+  return false;
 }
 
+// Fetches all the uses of an op until the use converges into an op
+// with no results.
 void getRecursiveUses(
     Operation *source, Operation *op, Operation *target,
     SmallVector<std::pair<Operation *, Operation *>> &loadStoreOps) {
@@ -215,16 +217,17 @@ void getRecursiveUses(
   }
 }
 
-void moveLoopInvariantCode(
+// Find all pairs of load/store ops that can be moved and move them just
+// before/after the forOp.
+void findAndMoveLoadStorePairs(
     AffineForOp forOp, OpBuilder &b,
     SmallVector<std::pair<Operation *, Operation *>> &loadStoreOps) {
-  // forOp.dump();
   auto &loopBody = forOp.getLoopBody();
 
   SmallVector<gpu::SubgroupMmaLoadMatrixOp> loadOps;
   SmallVector<gpu::SubgroupMmaStoreMatrixOp> storeOps;
 
-  // Collect all the WMMAops in the body of the loop.
+  // Collect all the WMMALoad/StoreOps in the body of the loop.
   for (auto &op : loopBody.getOps()) {
     if (auto mmaOp = dyn_cast<gpu::SubgroupMmaLoadMatrixOp>(op))
       loadOps.push_back(mmaOp);
@@ -235,7 +238,7 @@ void moveLoopInvariantCode(
   // llvm::outs() << "loadops found: " << loadOps.size() << "\n";
   // llvm::outs() << "storeops found: " << storeOps.size() << "\n";
   // Find pairs of load/stores such that the value being stored is somehow
-  // dependant on the load.
+  // dependent on the load.
   for (auto loadOp : loadOps) {
     for (auto storeOp : storeOps) {
       getRecursiveUses(loadOp.getOperation(), loadOp.getOperation(),
@@ -246,12 +249,13 @@ void moveLoopInvariantCode(
   // If no load/store pair found, then return.
   if (loadStoreOps.size() == 0)
     return;
+
   // for (auto p : loadStoreOps) {
   //  llvm::outs() << "-----------------------------------------------------\n";
   //  p.first->dump();
   //  p.second->dump();
   //}
-  // Check wether an op in the pair is hoistable w.r.t to the surrounding loop.
+  // Check whether an op in the pair is hoistable w.r.t to the surrounding loop.
   // llvm::outs() << loadStoreOps.size() << "\n";
 
   SmallVector<Value> newLoadOps;
@@ -270,9 +274,6 @@ void moveLoopInvariantCode(
       // p.first->dump();
       // p.second->dump();
 
-      // To move this pair of ops we need to to move the operands too. We have
-      // already fetched the operands using the affine map composition and we
-      // can safely create the same ops outside this for loop.
       b.setInsertionPoint(forOp);
       SmallVector<Value> indices;
       for (auto inx : llvm::zip(indexMaps, mapOprs)) {
@@ -286,7 +287,10 @@ void moveLoopInvariantCode(
       // Store these new indices for use later, while moving the store ops.
       newIndices.push_back(indices);
 
-      // Create new ops. These ops will be used as iter_args for the forOp.
+      // To move this pair of ops we need to to move the operands too. We have
+      // already fetched the operands using the affine map composition and we
+      // can safely create the same ops outside this for loop. Create new load
+      // ops. These ops will be used as iter_args for the forOp.
       auto origLoadop = cast<gpu::SubgroupMmaLoadMatrixOp>(p.first);
       newLoadOps.push_back(b.create<gpu::SubgroupMmaLoadMatrixOp>(
           forOp.getLoc(), origLoadop->getResultTypes()[0],
@@ -304,8 +308,6 @@ void moveLoopInvariantCode(
                      forOp.getUpperBoundOperands().end());
   newOperands.append(newLoadOps);
   forOp->setOperands(newOperands);
-
-  OperationState result(forOp.getLoc(), forOp->getName());
 
   // Add newly created ops as arguments to the basic block containing the loop
   // body.
@@ -344,6 +346,8 @@ void moveLoopInvariantCode(
 
   b.setInsertionPointToStart(&newForop.getLoopBody().front());
 
+  // Create storeOps just after the forOp. The operands to these store ops
+  // will be the results yielded by the forOp.
   SmallVector<gpu::SubgroupMmaStoreMatrixOp> clonedStoreOps;
   for (auto &op : forOp.getLoopBody().front().without_terminator()) {
     Operation *clonedOp = b.clone(op, mapping);
@@ -362,6 +366,7 @@ void moveLoopInvariantCode(
   for (auto op : clonedStoreOps) {
     toYield.push_back(op.src());
   }
+
   yieldOp->setOperands(toYield);
 
   // Place newly created storeOps just outside the for ops body and set their
@@ -395,10 +400,17 @@ void moveLoopInvariantCode(
   //                "--------------------------\n";
 }
 
+// Utility to move invariant load/store pairs with respect to a forOp
+// before/after respectively. The utility finds loads such that the result of
+// the store is somehow dependent on the what was loaded. The loads are moved
+// just before the forOp and the load results are set as iter_args for the
+// forOp. The result of the computation is then yielded by the forOp and result
+// of the forOp is then store by the storeOps which are moved just after the
+// forOp. In this way redundant load/stores can be moved out of a given forOp.
 void moveInvariantLoadStorePairs(FuncOp funcOp, OpBuilder b) {
   SmallVector<std::pair<Operation *, Operation *>> loadStoreOps;
   funcOp->walk([&](AffineForOp forOp) {
-    moveLoopInvariantCode(forOp, b, loadStoreOps);
+    findAndMoveLoadStorePairs(forOp, b, loadStoreOps);
   });
 }
 
@@ -421,7 +433,7 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
   SmallVector<AffineForOp> computeLoops;
   findComputeLoops(rootForOp, computeLoops);
 
-  // The expected number of loops 9 i.e., all matmul loops are tiled two
+  // The expected number of loops is 9 i.e., all matmul loops are tiled two
   // times.
   // TODO: Add cases when all the loops are not tiled.
   assert(computeLoops.size() == kMaxTiledLoops &&
@@ -443,57 +455,77 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
   // then caluclating the right indices for load/store operations and also
   // identifying the leading dimensions of the source/destination memrefs.
   // First change the loop steps to MMA size.
-  // TODO: Add CL option to get WMMA size once more version of WMMA ops are
+  // TODO: Add CL option to get WMMA size once more versions of WMMA ops are
   // introcuced.
-  computeLoops[2 * kNumIntialLoops].setStep(kWMMAM);
-  computeLoops[2 * kNumIntialLoops + 1].setStep(kWMMAN);
-  computeLoops[2 * kNumIntialLoops + 2].setStep(kWMMAK);
+  computeLoops[ThreadI].setStep(kWMMAM);
+  computeLoops[ThreadJ].setStep(kWMMAN);
+  computeLoops[ThreadK].setStep(kWMMAK);
 
-  // Now try to get the source/destination matrices for matmul by inspecting
-  // the innermost loop body. We'll assume the first load to be the `A`
-  // operand, second to be the `B` operand, Third to be the `c` operand.
-  AffineForOp innermostLoop = computeLoops[computeLoops.size() - 1];
+  // Create a new loop which will be the innermostLoop. This loop will have
+  // gpuSubgroup WmmaOps instead of scalar loads/stores and compute ops.
+  AffineForOp innermostLoop = computeLoops[ThreadK];
   Block &body = innermostLoop.getLoopBody().front();
   OpBuilder b(rootForOp.getContext());
+
   b.setInsertionPointAfter(innermostLoop);
   AffineForOp newInnermostLoop =
       b.create<AffineForOp>(rootForOp.getLoc(), 0, 0, innermostLoop.getStep());
 
+  // Copy bounds from the original innermostLoop.
   newInnermostLoop.setLowerBound(innermostLoop.getLowerBoundOperands(),
                                  innermostLoop.getLowerBoundMap());
   newInnermostLoop.setUpperBound(innermostLoop.getUpperBoundOperands(),
                                  innermostLoop.getUpperBoundMap());
 
+  // Insert wmmaOps in the newly created loop.
   b.setInsertionPointToStart(&newInnermostLoop.getLoopBody().front());
   Location loc = rootForOp.getLoc();
-
   SmallVector<Value> wmmaOps;
   unsigned numOpsProcessed = 0;
+
+  // Helper to emit indices as affine.apply's for a load/store op.
+  auto emitIndices = [&](SmallVector<Value> &index,
+                         SmallVector<Value> &valueOperands, AffineMap &opMap,
+                         MutableArrayRef<OpOperand> &operands) {
+    for (auto operand = operands.begin(), e = operands.end(); operand < e;
+         ++operand) {
+      if (operand->get() == innermostLoop.getInductionVar()) {
+        valueOperands.push_back(newInnermostLoop.getInductionVar());
+      } else {
+        valueOperands.push_back(operand->get());
+      }
+    }
+
+    // Emit affine.apply's for each result expr in the map.
+    for (unsigned i = 0, e = opMap.getNumResults(); i < e; ++i) {
+      index.push_back(
+          b.create<AffineApplyOp>(loc, opMap.getSubMap(i), valueOperands));
+    }
+  };
+
+  // Now try to get the source/destination matrices for matmul in the original
+  // innermostLoop and create corresponding ops in the new innermostLoop. We do
+  // so by inspecting the innermost loop body. We'll assume the first load to be
+  // the `A` operand, second to be the `B` operand, Third to be the `C` operand.
+  // We also emit affine.apply's for each index of the load/store op in order to
+  // use them as indices for gpuWmmaOps.
   for (auto op = body.begin(), e = body.end(); op != e; ++op) {
+    SmallVector<Value> index;
+    SmallVector<Value> valueOperands;
+    AffineMap opMap;
+    MutableArrayRef<OpOperand> operands;
     if (auto loadOp = dyn_cast<AffineLoadOp>(op)) {
       assert(numOpsProcessed <= 2 &&
              "Recipe for tensor core matmul failed, "
-             "innermost body doesn't represent a matmul");
-      SmallVector<Value> index;
-      SmallVector<Value> valueOperands;
-      AffineMap opMap = loadOp.getAffineMap();
-      auto operands = loadOp->getOpOperands().drop_front(1);
+             "innermost body probably doesn't represent a matmul");
+      opMap = loadOp.getAffineMap();
+      operands = loadOp->getOpOperands().drop_front(1);
 
-      // Get operands for the affine.apply op.
-      for (auto operand = operands.begin(), e = operands.end(); operand < e;
-           ++operand) {
-        if (operand->get() == innermostLoop.getInductionVar()) {
-          valueOperands.push_back(newInnermostLoop.getInductionVar());
-        } else {
-          valueOperands.push_back(operand->get());
-        }
-      }
-
-      // Emit affine.apply's for each result expr in the map.
-      for (unsigned i = 0, e = opMap.getNumResults(); i < e; ++i) {
-        index.push_back(
-            b.create<AffineApplyOp>(loc, opMap.getSubMap(i), valueOperands));
-      }
+      // Emit affine.apply's for each index.
+      emitIndices(index, valueOperands, opMap, operands);
+      // Cases when higher dimensional memrefs are present are unimplemented.
+      if (index.size() != 2)
+        return;
 
       MemRefType opType = loadOp.memref().getType().cast<MemRefType>();
       if (!opType.getAffineMaps().empty() &&
@@ -502,14 +534,13 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
       } else {
         // Create GPU WMMA loadOp.
         wmmaOps.push_back(b.create<gpu::SubgroupMmaLoadMatrixOp>(
-            loc,
-            gpu::MMAFragmentType::get(numElems[numOpsProcessed % 3], cOpType),
+            loc, gpu::MMAFragmentType::get(numElems[numOpsProcessed], cOpType),
             loadOp.memref(), index, b.getIndexAttr(opType.getDimSize(0)),
-            b.getStringAttr(ops[numOpsProcessed % 3])));
+            b.getStringAttr(ops[numOpsProcessed])));
         ++numOpsProcessed;
       }
     } else if (auto storeOp = dyn_cast<AffineStoreOp>(op)) {
-      if (numOpsProcessed != 0 && numOpsProcessed % 3 == 0) {
+      if (numOpsProcessed == 3) {
         // If this is the last loadOp that is being processed, Then we can
         // emit the compute and store op also.
         wmmaOps.push_back(b.create<gpu::SubgroupMmaComputeOp>(
@@ -517,12 +548,15 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
             wmmaOps[numOpsProcessed - 3], wmmaOps[numOpsProcessed - 2],
             wmmaOps[numOpsProcessed - 1]));
 
+        opMap = storeOp.getAffineMap();
+        operands = storeOp->getOpOperands().drop_front(2);
+
+        // Emit affine.apply's for each index.
+        emitIndices(index, valueOperands, opMap, operands);
+
         MemRefType opType = storeOp.memref().getType().cast<MemRefType>();
         b.create<gpu::SubgroupMmaStoreMatrixOp>(
-            loc, wmmaOps[numOpsProcessed], storeOp.memref(),
-            cast<gpu::SubgroupMmaLoadMatrixOp>(
-                wmmaOps[numOpsProcessed - 1].getDefiningOp())
-                .indices(),
+            loc, wmmaOps[numOpsProcessed], storeOp.memref(), index,
             b.getIndexAttr(opType.getDimSize(0)));
       }
     }
@@ -530,26 +564,25 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
 
   // Erase this for op and the newInnermostLoop at the correct position.
   innermostLoop.erase();
-  computeLoops[computeLoops.size() - 1] = newInnermostLoop;
+  computeLoops[ThreadK] = newInnermostLoop;
 
-  // Sink down the K-loop to an inner level, just inside the warp space
-  // `i` and `j` loops. The operations in `k` loop tile the warp space
-  // `i` must be moved with it. This, makes copy loop execute more number
-  // of times but, when these loops are mapped to a warp, It is ideally
-  // expected that they have a single iteration. So the copies will actually
-  // happen only once.
-  b.setInsertionPointToStart(&computeLoops[4].getLoopBody().front());
+  // Sink down the K-loop to an inner level, just inside the warp space `i` and
+  // `j` loops. The operations in `k` loop, before the warp space `i`, must be
+  // moved with it. This, makes those operations get executed more number of
+  // times than before, but, when these loops are mapped to a warp in GPU, It is
+  // ideally expected that they have a single iteration. So They will get
+  // executed only once.
+  b.setInsertionPointToStart(&computeLoops[WarpJ].getLoopBody().front());
 
   SmallVector<Operation *> toErase;
-  Block &kBody = computeLoops[2].getLoopBody().front();
+  Block &kBody = computeLoops[TbK].getLoopBody().front();
 
-  // Gather all operations to erase between the global `k` loop and the
-  // dimension and the warp-space loops. Clone them first just inside the
-  // sunken `k` loop.
+  // Gather all operations between the global `k` loop and the warp-space loops.
+  // Clone them just inside the sunken `k` loop.
   for (auto op = kBody.begin(), e = kBody.end();
-       op != e && &*op != computeLoops[3].getOperation(); ++op) {
-    // TODO: The loop struture has been inspected and it has been checked that
-    // only copy loops exist here.
+       op != e && &*op != computeLoops[WarpI].getOperation(); ++op) {
+    // TODO: Inspect the loop structure and guarantee that only copy loops exist
+    // here.
     b.clone(*op);
     toErase.push_back(&*op);
   }
@@ -559,35 +592,39 @@ void TestSpecializeAffineForWMMA::runOnFunction() {
     op->erase();
 
   // Interchange the warp space loops with `k` loop.
-  interchangeLoops(computeLoops[2], computeLoops[3]);
-  interchangeLoops(computeLoops[2], computeLoops[4]);
+  interchangeLoops(computeLoops[TbK], computeLoops[WarpI]);
+  interchangeLoops(computeLoops[TbK], computeLoops[WarpJ]);
 
   // Update positions in the original list.
-  std::swap(computeLoops[3], computeLoops[2]);
-  std::swap(computeLoops[4], computeLoops[3]);
+  std::swap(computeLoops[WarpI], computeLoops[TbK]);
+  std::swap(computeLoops[WarpK], computeLoops[WarpI]);
 
   // Permute the innermost loop nest to bring `k` at the outermost position.
   MutableArrayRef<AffineForOp> toPermute(computeLoops.begin(),
                                          computeLoops.end());
+
   permuteLoops(toPermute.drop_front(6), {1, 2, 0});
-  std::swap(computeLoops[8], computeLoops[7]);
-  std::swap(computeLoops[6], computeLoops[7]);
+
+  // Update positions in the original list.
+  std::swap(computeLoops[ThreadK], computeLoops[ThreadJ]);
+  std::swap(computeLoops[ThreadI], computeLoops[ThreadJ]);
 
   // Unroll-Jam the innermost `i` loop by factor equal to trip count.
-  if (getConstantTripCount(computeLoops[7]).hasValue()) {
-    loopUnrollJamByFactor(computeLoops[7],
-                          getConstantTripCount(computeLoops[7]).getValue());
+  if (getConstantTripCount(computeLoops[ThreadJ]).hasValue()) {
+    loopUnrollJamByFactor(
+        computeLoops[ThreadJ],
+        getConstantTripCount(computeLoops[ThreadJ]).getValue());
   }
 
   // Unroll the innermostLoop completely.
-  loopUnrollFull(computeLoops[8]);
+  loopUnrollFull(computeLoops[ThreadK]);
 
   // Promote the now innermostLoop, which is the `k` loop.
   // TODO: Check why failure is returned even when the loop has been promoted.
-  if (promoteIfSingleIteration(computeLoops[6]).Failure)
-    innermostLoop = computeLoops[5];
+  if (promoteIfSingleIteration(computeLoops[ThreadI]).Failure)
+    innermostLoop = computeLoops[WarpK];
   else
-    innermostLoop = computeLoops[6];
+    innermostLoop = computeLoops[ThreadI];
 
   // We need to move ops from inside to the outside level which are invariant
   // on the surrounding loop ivs. We handle side effecting operations in a
