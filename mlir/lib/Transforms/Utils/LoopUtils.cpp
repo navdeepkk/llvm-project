@@ -2066,7 +2066,7 @@ void mlir::coalesceLoops(MutableArrayRef<scf::ForOp> loops) {
   second.erase();
 }
 
-void mlir::collapseParallelLoops(
+scf::ParallelOp mlir::collapseParallelLoops(
     scf::ParallelOp loops, ArrayRef<std::vector<unsigned>> combinedDimensions) {
   OpBuilder outsideBuilder(loops);
   Location loc = loops.getLoc();
@@ -2147,6 +2147,8 @@ void mlir::collapseParallelLoops(
       Block::iterator(newPloop.getBody()->back()),
       loops.getBody()->getOperations());
   loops.erase();
+
+  return newPloop;
 }
 
 void mlir::mapLoopToProcessorIds(scf::ForOp forOp, ArrayRef<Value> processorId,
