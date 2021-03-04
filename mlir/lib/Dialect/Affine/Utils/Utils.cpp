@@ -129,9 +129,86 @@ static AffineIfOp hoistAffineIfOp(AffineIfOp ifOp, Operation *hoistOverOp) {
   return hoistedIfOp;
 }
 
+/// Hoists the min/max of values from the lower/upper bound of `forOp` as an
+/// AffineMin/MaxOp and replaces the bounds of `forOp` with the result of those
+/// AffineMin/MaxOps. `isLowerBound` specifies whether the replacement is being
+/// done for the lower bound or upper bound of `forOp`.
+static void hoistsMinMaxToAffineMinMax(AffineForOp forOp, bool isLowerBound) {
+  OpBuilder opBuilder(forOp);
+  Location parOpLoc = forOp.getLoc();
+  Operation *parOp = forOp->getParentOp();
+
+  // "isTiledLoopNestBoundary" is an attribute attached with an affine.for op
+  // which specifies that the for op with whom this attribute is attached is the
+  // innermost loop of tiled loop nest. `kIdentifyBoundary` is used to identify
+  // the loop with "isTiledLoopNestBoundary" attribute i.e. the boundary for op.
+  // For example in case of tiling the intra tile loop bounds make use of inter
+  // tile loop IVs and in that case if we hoist the min/max of values as
+  // AffineMin/MaxOp which are loop bounds of intra tile loops then we can't go
+  // beyond the inter tile loops and that's why we identify the boundary and
+  // place the min/max ops at the appropriate place.
+  const char kIdentifyBoundary[] = "isTiledLoopNestBoundary";
+
+  // Finding the bounday loop and creating the insertion point for affine
+  // min/max at that point. If the `forOp` doesn't have any parent loop with
+  // `kIdentifyBoundary` then it means it's the top loop nest and hence it will
+  // not depend on any other loops IVs.
+  while (!isa<FuncOp>(parOp)) {
+    if (isa<AffineForOp>(parOp) && parOp->getAttr(kIdentifyBoundary)) {
+      parOpLoc = parOp->getLoc();
+      opBuilder.clearInsertionPoint();
+      opBuilder.setInsertionPoint(cast<AffineForOp>(parOp).getBody(),
+                                  cast<AffineForOp>(parOp).getBody()->begin());
+      break;
+    }
+    parOp = parOp->getParentOp();
+  }
+
+  // Creating a 1-d identity map to set it as lower/upper bound map of `forOp`.
+  AffineMap idMap =
+      AffineMap::getMultiDimIdentityMap(1, opBuilder.getContext());
+
+  if (isLowerBound) {
+    // True if the replacement needs to be done for lower bound of the `forOp`.
+    // And in that case the lower bound is the result of max of values, we hoist
+    // the max operation as AffineMaxOp and sets the lower bound as its result.
+    AffineMaxOp maxOp = opBuilder.create<AffineMaxOp>(
+        parOpLoc, forOp.getLowerBoundMap(), forOp.getLowerBoundOperands());
+    forOp.setLowerBound(maxOp.getResult(), idMap);
+  } else {
+    // True if the replacement needs to be done for upper bound of the `forOp`.
+    // And in that case the upper bound is the result of min of values, we hoist
+    // the min operation as AffineMinOp and sets the upper bound as its result.
+    AffineMinOp minOp = opBuilder.create<AffineMinOp>(
+        parOpLoc, forOp.getUpperBoundMap(), forOp.getUpperBoundOperands());
+    forOp.setUpperBound(minOp.getResult(), idMap);
+  }
+}
+
 /// Replace affine.for with a 1-d affine.parallel and clone the former's body
 /// into the latter while remapping values.
 void mlir::affineParallelize(AffineForOp forOp) {
+  // `numLBMapResults` and `numUBMapResults` contains the number of results
+  // of lower bound map and upper bound map of `forOp`.
+  unsigned numLBMapResults = forOp.getLowerBoundMap().getNumResults();
+  unsigned numUBMapResults = forOp.getUpperBoundMap().getNumResults();
+
+  // If number of results of lower bound map of `forOp` is > 1 then it means
+  // that the lower bound of `forOp` is max of those resutls. AffineParallelOp
+  // doesn't allow max/min of values as its bounds so we hoist this max op
+  // as an AffineMaxOp and replaces the lower bound of `forOp` with the result
+  // of this AffineMaxOp.
+  if (numLBMapResults > 1)
+    hoistsMinMaxToAffineMinMax(forOp, true);
+
+  // If number of results of upper bound map of `forOp` is > 1 then it means
+  // that the upper bound of `forOp` is min of those resutls. AffineParallelOp
+  // doesn't allow max/min of values as its bounds so we hoist this min op
+  // as an AffineMinOp and replaces the upper bound of `forOp` with the result
+  // of this AffienMinOp.
+  if (numUBMapResults > 1)
+    hoistsMinMaxToAffineMinMax(forOp, false);
+
   Location loc = forOp.getLoc();
   OpBuilder outsideBuilder(forOp);
 
@@ -170,7 +247,7 @@ void mlir::affineParallelize(AffineForOp forOp) {
   // Creating empty 1-D affine.parallel op.
   AffineParallelOp newPloop = outsideBuilder.create<AffineParallelOp>(
       loc, llvm::None, llvm::None, lowerBoundMap, lowerBoundOperands,
-      upperBoundMap, upperBoundOperands);
+      upperBoundMap, upperBoundOperands, forOp.getStep());
   // Steal the body of the old affine for op and erase it.
   newPloop.region().takeBody(forOp.region());
   forOp.erase();

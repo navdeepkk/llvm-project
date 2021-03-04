@@ -14,6 +14,7 @@
 #define MLIR_DIALECT_AFFINE_UTILS_H
 
 #include "mlir/IR/AffineExpr.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
