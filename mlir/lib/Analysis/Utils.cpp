@@ -1184,7 +1184,8 @@ bool mlir::isLoopParallel(AffineForOp forOp) {
   auto walkResult = forOp.walk([&](Operation *opInst) -> WalkResult {
     if (isa<AffineReadOpInterface, AffineWriteOpInterface>(opInst))
       loadAndStoreOpInsts.push_back(opInst);
-    else if (!isa<AffineForOp, AffineYieldOp, AffineIfOp>(opInst) &&
+    else if (!isa<AffineForOp, AffineYieldOp, AffineIfOp, AllocOp>(
+                 opInst) &&
              !MemoryEffectOpInterface::hasNoEffect(opInst))
       return WalkResult::interrupt();
 
@@ -1204,11 +1205,39 @@ bool mlir::isLoopParallel(AffineForOp forOp) {
     for (auto *dstOpInst : loadAndStoreOpInsts) {
       MemRefAccess dstAccess(dstOpInst);
       FlatAffineConstraints dependenceConstraints;
+      SmallVector<DependenceComponent, 2> dependenceComponents;
       DependenceResult result = checkMemrefAccessDependence(
           srcAccess, dstAccess, depth, &dependenceConstraints,
-          /*dependenceComponents=*/nullptr);
-      if (result.value != DependenceResult::NoDependence)
-        return false;
+          &dependenceComponents);
+      if (result.value != DependenceResult::NoDependence) {
+        // Depth of defining op inside the forOp.
+        int64_t defOpDepth = -1;
+
+        // Depth of the first non-zero dependence.
+        unsigned depDepth = std::numeric_limits<unsigned>::max();
+
+        // Find the depth of defining op.
+        if (auto defOp = srcAccess.memref.getDefiningOp())
+          if (defOp->getParentOfType<AffineForOp>())
+            defOpDepth = getNestingDepth(defOp);
+
+        // Check if the depth of the first dependence carrying loop is less than
+        // the defining op(alloc). If yes, then there is a dependence,
+        // else the dependence is not present because the semantics dictate that
+        // a new buffer for that memref will be created whenever the dependence
+        // carrying loop progresses in the direction of the dependence.
+        for (unsigned i = 0, e = dependenceComponents.size(); i < e; ++i) {
+          if ((dependenceComponents[i].lb.hasValue() &&
+               dependenceComponents[i].lb.getValue() != 0))
+            depDepth = std::min(depDepth, i);
+          if ((dependenceComponents[i].ub.hasValue() &&
+               dependenceComponents[i].ub.getValue() != 0))
+            depDepth = std::min(depDepth, i);
+        }
+
+        if (defOpDepth <= depDepth)
+          return false;
+      }
     }
   }
   return true;
