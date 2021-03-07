@@ -138,12 +138,16 @@ static LogicalResult verifyWMMALoadOp(T op, StringRef operand) {
   auto i32Ptr3Ty = LLVM::LLVMPointerType::get(i32Ty, 3);
   auto i32Ptr0Ty = LLVM::LLVMPointerType::get(i32Ty, 0);
   auto f16Ty = FloatType::getF16(context);
+  auto f32Ty = FloatType::getF32(context);
   auto f16x2Ty = VectorType::get(2, f16Ty);
   auto f16x2x4StructTy = LLVM::LLVMStructType::getLiteral(
       context, {f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty});
   auto f16x2x8StructTy = LLVM::LLVMStructType::getLiteral(
       context,
       {f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty, f16x2Ty});
+  auto f32x8StructTy = LLVM::LLVMStructType::getLiteral(
+      context,
+      {f32Ty, f32Ty, f32Ty, f32Ty, f32Ty, f32Ty, f32Ty, f32Ty});
 
   SmallVector<Type, 2> operandTypes(op.getOperandTypes().begin(),
                                     op.getOperandTypes().end());
@@ -160,9 +164,9 @@ static LogicalResult verifyWMMALoadOp(T op, StringRef operand) {
                             "a struct of 8 <halfx2>s");
     }
   } else if (operand.equals("COp")) {
-    if (op.getType() != f16x2x4StructTy) {
+    if (op.getType() != f16x2x4StructTy && op.getType() != f32x8StructTy) {
       return op.emitOpError(
-          "expected result type of loadCOp to be a struct of 4 <halfx2>s");
+          "expected result type of loadCOp to be a struct of 4 <halfx2>s or 8 f32s");
     }
   }
 
@@ -177,11 +181,15 @@ static LogicalResult verify(WMMALoadBOp op) {
   return verifyWMMALoadOp(op, "BOp");
 }
 
-static LogicalResult verify(WMMALoadCOp op) {
+static LogicalResult verify(WMMALoadCF16Op op) {
   return verifyWMMALoadOp(op, "COp");
 }
 
-static LogicalResult verify(WMMAStoreOp op) {
+static LogicalResult verify(WMMALoadCF32Op op) {
+  return verifyWMMALoadOp(op, "COp");
+}
+
+static LogicalResult verify(WMMAStoreF16Op op) {
   MLIRContext *context = op.getContext();
   auto i32Ty = IntegerType::get(context, 32);
   auto i32Ptr1Ty = LLVM::LLVMPointerType::get(i32Ty, 1);
@@ -192,11 +200,11 @@ static LogicalResult verify(WMMAStoreOp op) {
 
   SmallVector<Type, 2> operandTypes(op.getOperandTypes().begin(),
                                     op.getOperandTypes().end());
-  if (operandTypes != SmallVector<Type, 5>{i32Ptr1Ty, f16x2Ty, f16x2Ty, f16x2Ty,
+  if (operandTypes != SmallVector<Type, 6>{i32Ptr1Ty, f16x2Ty, f16x2Ty, f16x2Ty,
                                            f16x2Ty, i32Ty} &&
-      operandTypes != SmallVector<Type, 5>{i32Ptr3Ty, f16x2Ty, f16x2Ty, f16x2Ty,
+      operandTypes != SmallVector<Type, 6>{i32Ptr3Ty, f16x2Ty, f16x2Ty, f16x2Ty,
                                            f16x2Ty, i32Ty} &&
-      operandTypes != SmallVector<Type, 5>{i32Ptr0Ty, f16x2Ty, f16x2Ty, f16x2Ty,
+      operandTypes != SmallVector<Type, 6>{i32Ptr0Ty, f16x2Ty, f16x2Ty, f16x2Ty,
                                            f16x2Ty, i32Ty}) {
     return op.emitOpError("expected operands to be a source pointer in memory "
                           "space 0, 1, 3 followed by ldm of the source");
@@ -205,7 +213,33 @@ static LogicalResult verify(WMMAStoreOp op) {
   return success();
 }
 
-static LogicalResult verify(WMMAMmaOp op) {
+static LogicalResult verify(WMMAStoreF32Op op) {
+  MLIRContext *context = op.getContext();
+  auto i32Ty = IntegerType::get(context, 32);
+  auto i32Ptr1Ty = LLVM::LLVMPointerType::get(i32Ty, 1);
+  auto i32Ptr3Ty = LLVM::LLVMPointerType::get(i32Ty, 3);
+  auto i32Ptr0Ty = LLVM::LLVMPointerType::get(i32Ty, 0);
+  auto f32Ty = FloatType::getF32(context);
+
+  SmallVector<Type, 2> operandTypes(op.getOperandTypes().begin(),
+                                    op.getOperandTypes().end());
+  if (operandTypes != SmallVector<Type, 5>{i32Ptr1Ty, f32Ty, f32Ty, f32Ty,
+                                           f32Ty, f32Ty, f32Ty, f32Ty, f32Ty,
+                                           i32Ty} &&
+      operandTypes != SmallVector<Type, 5>{i32Ptr3Ty, f32Ty, f32Ty, f32Ty,
+                                           f32Ty, f32Ty, f32Ty, f32Ty, f32Ty,
+                                           i32Ty} &&
+      operandTypes != SmallVector<Type, 5>{i32Ptr0Ty, f32Ty, f32Ty, f32Ty,
+                                           f32Ty, f32Ty, f32Ty, f32Ty, f32Ty,
+                                           i32Ty}) {
+    return op.emitOpError("expected operands to be a source pointer in memory "
+                          "space 0, 1, 3 followed by ldm of the source");
+  }
+
+  return success();
+}
+
+static LogicalResult verify(WMMAMmaF16F16Op op) {
   MLIRContext *context = op.getContext();
   auto f16Ty = FloatType::getF16(context);
   auto f16x2Ty = VectorType::get(2, f16Ty);
@@ -219,6 +253,51 @@ static LogicalResult verify(WMMAMmaOp op) {
 
   if (op.getResult().getType() != f16x2x4StructTy)
     return op.emitOpError("expected result type to be a struct of 4 <halfx2>s");
+
+  return success();
+}
+
+static LogicalResult verify(WMMAMmaF32F32Op op) {
+  unsigned numAOperands = 8;
+  unsigned numBOperands = 8;
+  unsigned numCOperands = 8;
+  MLIRContext *context = op.getContext();
+  auto f16Ty = FloatType::getF16(context);
+  auto f32Ty = FloatType::getF32(context);
+  auto f16x2Ty = VectorType::get(2, f16Ty);
+  auto f32x8StructTy = LLVM::LLVMStructType::getLiteral(
+      context, {f32Ty, f32Ty, f32Ty, f32Ty, f32Ty, f32Ty, f32Ty, f32Ty});
+
+  SmallVector<Type> aOpTypes;
+  SmallVector<Type> bOpTypes;
+  SmallVector<Type> cOpTypes;
+
+  for (auto &operand : op->getOpOperands().take_front(numAOperands)) {
+    aOpTypes.push_back(operand.get().getType());
+  }
+
+  for (auto &operand :
+       op->getOpOperands().drop_front(numAOperands).take_front(numBOperands)) {
+    bOpTypes.push_back(operand.get().getType());
+  }
+
+  for (auto &operand : op->getOpOperands()
+                           .drop_front(numAOperands + numBOperands)
+                           .take_front(numCOperands)) {
+    cOpTypes.push_back(operand.get().getType());
+  }
+
+  if (aOpTypes != SmallVector<Type>(8, f16x2Ty))
+    return op.emitOpError("expected 8 <halfx2>s for `a` operand");
+
+  if (bOpTypes != SmallVector<Type>(8, f16x2Ty))
+    return op.emitOpError("expected 8 <halfx2>s for `b` operand");
+
+  if (cOpTypes != SmallVector<Type>(8, f32Ty))
+    return op.emitOpError("expected 8 f32s for `c` operand");
+
+  if (op.getResult().getType() != f32x8StructTy)
+    return op.emitOpError("expected result type to be a struct of 8 f32s");
 
   return success();
 }

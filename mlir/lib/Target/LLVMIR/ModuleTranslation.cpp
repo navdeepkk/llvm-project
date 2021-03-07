@@ -307,7 +307,8 @@ llvm::Value *mlir::LLVM::detail::createNvvmIntrinsicCall(llvm::IRBuilderBase &bu
   llvm::Module *module = builder.GetInsertBlock()->getModule();
   llvm::Function *fn;
   if (llvm::Intrinsic::isOverloaded(intrinsic)) {
-    if (intrinsic != llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f16_f16) {
+    if (intrinsic != llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f16_f16 &&
+	intrinsic != llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f32_f32) {
       // NVVM load and store instrinsic names are overloaded on the
       // source/destination pointer type. Pointer is the first argument in the
       // corresponding NVVM Op.
