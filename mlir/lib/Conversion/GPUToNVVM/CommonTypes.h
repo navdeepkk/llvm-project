@@ -35,6 +35,7 @@ public:
     int32Type = IntegerType::get(context, 32);
     int32PtrTy = LLVM::LLVMPointerType::get(int32Type);
     f16Ty = FloatType::getF16(context);
+    f32Ty = FloatType::getF32(context);
     f16PtrTy = LLVM::LLVMPointerType::get(f16Ty);
     f16x8Ty = VectorType::get(8, f16Ty);
     f16x16Ty = VectorType::get(16, f16Ty);
@@ -44,6 +45,8 @@ public:
     fragArrayABPtrTy = LLVM::LLVMPointerType::get(fragArrayABTy);
     fragArrayCDTy = LLVM::LLVMStructType::getLiteral(
         context, SmallVector<Type>(4, f16x2Ty));
+    fragArrayCDF32Ty = LLVM::LLVMStructType::getLiteral(
+        context, SmallVector<Type>(8, f32Ty));
     fragArrayCDPtrTy = LLVM::LLVMPointerType::get(fragArrayCDTy);
   };
 
@@ -52,6 +55,7 @@ public:
   Type int64Type;
   Type int32PtrTy;
   Type f16Ty;
+  Type f32Ty;
   Type f16PtrTy;
   Type f16x2Ty;
   Type f16x8Ty;
@@ -59,6 +63,7 @@ public:
   Type fragArrayABTy;
   Type fragArrayABPtrTy;
   Type fragArrayCDTy;
+  Type fragArrayCDF32Ty;
   Type fragArrayCDPtrTy;
   SmallVector<unsigned, 4> numHalfsInOpFrags;
   enum OperandMap { A, B, C, D };
