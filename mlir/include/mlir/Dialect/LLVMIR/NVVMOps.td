@@ -219,7 +219,7 @@ def NVVM_WMMALoadBOp :
   let verifier = [{ return ::verify(*this); }];
 }
 
-def NVVM_WMMALoadCOp :
+def NVVM_WMMALoadCF16Op :
   NVVM_WMMALoadOp<"wmma.m16n16k16.load.c.f16.row.stride">{
   string llvmBuilder = [{
     $res = createNvvmIntrinsicCall(
@@ -230,7 +230,7 @@ def NVVM_WMMALoadCOp :
     Example:
 
     ```mlir
-    %2 = nvvm.wmma.m16n16k16.load.c %0, %1 : !llvm.ptr<i32, 3>, !llvm.i32 ->
+    %2 = nvvm.wmma.m16n16k16.load.c.f16.row.stride %0, %1 : !llvm.ptr<i32, 3>, !llvm.i32 ->
     !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>
     ```
   }];
@@ -240,17 +240,32 @@ def NVVM_WMMALoadCOp :
   let verifier = [{ return ::verify(*this); }];
 }
 
-def NVVM_WMMAStoreOp :
-  NVVM_Op<"wmma.m16n16k16.store.d.f16.row.stride">,
-  Arguments<(ins Variadic<LLVM_Type>:$args)>{
+def NVVM_WMMALoadCF32Op :
+  NVVM_WMMALoadOp<"wmma.m16n16k16.load.c.f32.row.stride">{
   string llvmBuilder = [{
-        createNvvmIntrinsicCall(
-        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_store_d_f16_row_stride, $args);
+    $res = createNvvmIntrinsicCall(
+      builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_load_c_f32_row_stride, $args);
   }];
 
+  string opDescription = [{
+    Example:
+
+    ```mlir
+    %2 = nvvm.wmma.m16n16k16.load.c.f32.row.stride %0, %1 : !llvm.ptr<i32, 3>, !llvm.i32 ->
+    !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    ```
+  }];
+  
+  let description = !strconcat(baseDescription, opDescription);
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+class NVVM_WMMAStoreOp<string mnemonic> : NVVM_Op<mnemonic>,
+  Arguments<(ins Variadic<LLVM_Type>:$args)>{
   let summary = "Warp synchronous matrix store";
 
-  let description = [{
+  string baseDescription = [{
     The `nvvm.wmma.m16n16k16.store` operation stores a matrix collectively using
     all the threads in a warp.
 
@@ -262,34 +277,58 @@ def NVVM_WMMAStoreOp :
 
     This op is meant to be used along with `nvvm.wmma.m16n16k16.load` and
     `nvvm.wmma.m16n16k16.mma`.
-
-    Example:
-
-    ```mlir
-    nvvm.wmma.m16n16k16.store %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10 :
-    !llvm.ptr<i32, 3>, !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>,
-    vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>,
-    !llvm.i32
-    ```
   }];
 
   let assemblyFormat = "$args attr-dict `:` type($args)";
+}
+
+def NVVM_WMMAStoreF16Op : NVVM_WMMAStoreOp<"wmma.m16n16k16.store.d.f16.row.stride"> {
+  string llvmBuilder = [{
+        createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_store_d_f16_row_stride, $args);
+  }];
+
+  string opDescription = [{
+    Example:
+
+    ```mlir
+    nvvm.wmma.m16n16k16.stored.f16.row.stride %0, %1, %2, %3, %4, %5, %6 : !llvm.ptr<i32, 3>,
+    !llvm.struct<(vec<2 x half>, vec<2 x half>, vec<2 x half>, vec<2 x half>)>, !llvm.i32
+    ```
+  }];
+
+  let description = !strconcat(baseDescription, opDescription);
 
   let verifier = [{ return ::verify(*this); }];
 }
 
-def NVVM_WMMAMmaOp :
-  NVVM_Op<"wmma.m16n16k16.mma.row.row.f16.f16">,
-  Results<(outs LLVM_AnyStruct:$res)>,
-  Arguments<(ins Variadic<LLVM_Type>:$args)>{
+def NVVM_WMMAStoreF32Op : NVVM_WMMAStoreOp<"wmma.m16n16k16.store.d.f32.row.stride"> {
   string llvmBuilder = [{
-    $res = createNvvmIntrinsicCall(
-        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f16_f16, $args);
+        createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_store_d_f32_row_stride, $args);
   }];
 
+  string opDescription = [{
+    Example:
+
+    ```mlir
+    nvvm.wmma.m16n16k16.store.d.f32.row.stride %0, %1, %2, %3, %4, %5, %6, %7, %8, %9,
+    %10 : !llvm.ptr<i32, 3>, !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>,
+    !llvm.i32
+    ```
+  }];
+  
+  let description = !strconcat(baseDescription, opDescription);
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+class NVVM_WMMAMmaOp<string mnemonic> : NVVM_Op<mnemonic>,
+  Results<(outs LLVM_AnyStruct:$res)>,
+  Arguments<(ins Variadic<LLVM_Type>:$args)>{
   let summary = "Warp synchronous matrix-multiply accumulate using tensor cores.";
 
-  let description = [{
+  string baseDescription = [{
     The `nvvm.wmma.m16n16k16.mma` operation performs a matrix-multiply accumulate
     (mma) operation using all the threads in a warp.
 
@@ -300,13 +339,22 @@ def NVVM_WMMAMmaOp :
 
     This op is meant to be used along with `nvvm.wmma.m16n16k16.load` and `nvvm.wmma.
     m16n16k16.store`.
+  }];
+}
 
+def NVVM_WMMAMmaF16F16Op : NVVM_WMMAMmaOp<"wmma.m16n16k16.mma.row.row.f16.f16">{
+  string llvmBuilder = [{
+    $res = createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f16_f16, $args);
+  }];
+
+  string opDescription = [{
     Example:
 
     ```mlir
-    %20 = nvvm.wmma.m16n16k16.mma %0, %1, %2, %3, %4, %5, %6, %7, %8, %9, %10, %11, %12,
-    %13, %14, %15, %16, %17, %18, %19 : vector<2xf16> -> !llvm.struct<(vector<2xf16>,
-    vector<2xf16>, vector<2xf16>, vector<2xf16>)> 
+    %20 = nvvm.wmma.m16n16k16.mma.row.row.f16.f16 %0, %1, %2, %3, %4, %5, %6, %7, %8,
+    %9, %10, %11, %12, %13, %14, %15, %16, %17, %18, %19 : vector<2xf16> -> !llvm.struct
+    <(vector<2xf16>, vector<2xf16>, vector<2xf16>, vector<2xf16>)>
     ```
   }];
 
@@ -338,13 +386,42 @@ def NVVM_WMMAMmaOp :
     p << getOperationName();
     p << ' ';
     p << args();
-    p.printOptionalAttrDict(getAttrs(), {});
+    p.printOptionalAttrDict(getOperation()->getAttrs(), {});
     p << " : ";
     p << getOperation()->getOperand(0).getType();
     p << ' ' << "->";
     p << ' ';
     p << ::llvm::ArrayRef<::mlir::Type>(res().getType());
   }];
+
+  let description = !strconcat(baseDescription, opDescription);
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def NVVM_WMMAMmaF32F32Op : NVVM_WMMAMmaOp<"wmma.m16n16k16.mma.row.row.f32.f32">{
+  string llvmBuilder = [{
+    $res = createNvvmIntrinsicCall(
+        builder, llvm::Intrinsic::nvvm_wmma_m16n16k16_mma_row_row_f32_f32, $args);
+  }];
+
+  string opDescription = [{
+    Example:
+
+    ```mlir
+    %24 = nvvm.wmma.m16n16k16.mma.row.row.f32.f32 %0, %1, %2, %3, %4, %5, %6, %7, %8
+    %9, %10, %11, %12, %13, %14, %15, %16, %17, %18, %19, %20, %21, %22, %23 :
+    (vector<2xf16>, vector<2xf16>, vector<2xf16>, vector<2xf16>, vector<2xf16>,
+    vector<2xf16>, vector<2xf16>, vector<2xf16>, vector<2xf16>, vector<2xf16>,
+    vector<2xf16>, vector<2xf16>, vector<2xf16>, vector<2xf16>, vector<2xf16>,
+    vector<2xf16>, f32, f32, f32, f32, f32, f32, f32, f32) -> !llvm.struct<(f32,
+    f32, f32, f32, f32, f32, f32, f32)>
+    ```
+  }];
+
+  let assemblyFormat = "$args attr-dict `:` functional-type($args, $res)";
+
+  let description = !strconcat(baseDescription, opDescription);
 
   let verifier = [{ return ::verify(*this); }];
 }

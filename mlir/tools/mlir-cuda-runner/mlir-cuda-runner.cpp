@@ -132,7 +132,7 @@ static void registerCudaRunnerPasses() {
         pm.addPass(createGpuKernelOutliningPass());
         auto &kernelPm = pm.nest<gpu::GPUModuleOp>();
         kernelPm.addPass(createStripDebugInfoPass());
-        kernelPm.addPass(createLowerGpuOpsToNVVMOpsPass());
+        kernelPm.addPass(createLowerGpuOpsToNVVMOpsPass(clIndexWidth.getValue()));
 	kernelPm.addPass(createConvertGPUKernelToBlobPass(
 	    translateModuleToLLVMIR, compilePtxToCubin, "nvptx64-nvidia-cuda",
 	    clSMVersion.getValue(), "+ptx60", options.gpuBinaryAnnotation));

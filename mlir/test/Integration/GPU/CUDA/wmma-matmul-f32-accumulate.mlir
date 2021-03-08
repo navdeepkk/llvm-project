@@ -12,11 +12,10 @@
 module attributes {gpu.container_module}  {
   func @main() {
     %0 = alloc() {alignment = 32} : memref<16x16xf16>
-    %22 = alloc() {alignment = 32} : memref<16x16xf16>
-    %1 = alloc() {alignment = 32} : memref<16x16xf32>
+    %22 = alloc() {alignment = 32} : memref<16x16xf32>
 
     %f1 = constant 1.0e+00 : f16
-    %f0 = constant 0.0e+00 : f16
+    %f0 = constant 0.0e+00 : f32
     %c0 = constant 0 : index
     %c16 = constant 16 : index
     %c32 = constant 32 : index
@@ -31,29 +30,19 @@ module attributes {gpu.container_module}  {
     // Intialize the accumulator matrix with zeros.
     scf.for %arg0 = %c0 to %c16 step %c1 {
       scf.for %arg1 = %c0 to %c16 step %c1 {
-        store %f0, %22[%arg0, %arg1] : memref<16x16xf16>
+        store %f0, %22[%arg0, %arg1] : memref<16x16xf32>
       }
     }
 
     %2 = memref_cast %0 : memref<16x16xf16> to memref<*xf16>
-    %33 = memref_cast %22 : memref<16x16xf16> to memref<*xf16>
-    %3 = memref_cast %1 : memref<16x16xf32> to memref<*xf32>
+    %33 = memref_cast %22 : memref<16x16xf32> to memref<*xf32>
     gpu.host_register %2 : memref<*xf16>
-    gpu.host_register %33 : memref<*xf16>
+    gpu.host_register %33 : memref<*xf32>
 
-    gpu.launch_func  @main_kernel::@main_kernel blocks in (%c1, %c1, %c1) threads in (%c32, %c1, %c1) args(%0 : memref<16x16xf16>, %22 : memref<16x16xf16>)
-
-    // Convert the results from f16 to f32 for printing.
-    scf.for %arg0 = %c0 to %c16 step %c1 {
-      scf.for %arg1 = %c0 to %c16 step %c1 {
-        %6 = load %0[%arg0, %arg1] : memref<16x16xf16>
-        %7 = fpext %6 : f16 to f32
-        store %7, %1[%arg0, %arg1] : memref<16x16xf32>
-      }
-    }
+    gpu.launch_func  @main_kernel::@main_kernel blocks in (%c1, %c1, %c1) threads in (%c32, %c1, %c1) args(%0 : memref<16x16xf16>, %22 : memref<16x16xf32>)
 
     // Print the memref after computation.
-    call @print_memref_f32(%3) : (memref<*xf32>) -> ()
+    call @print_memref_f32(%33) : (memref<*xf32>) -> ()
     // CHECK: [16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16],
     // CHECK-NEXT: [16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16],
     // CHECK-NEXT: [16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16,   16],
@@ -74,16 +63,16 @@ module attributes {gpu.container_module}  {
   }
 
   gpu.module @main_kernel {
-    gpu.func @main_kernel(%arg0: memref<16x16xf16>, %arg22 : memref<16x16xf16>) kernel {
+    gpu.func @main_kernel(%arg0: memref<16x16xf16>, %arg22 : memref<16x16xf32>) kernel {
       %c0 = constant 0 : index
 
       %0 = gpu.subgroup_mma_load_matrix %arg0[%c0, %c0] {operand = "AOp", leadDimension = 16 : index} : memref<16x16xf16> -> !gpu.mmafragment<8, vector<2xf16>>
       %1 = gpu.subgroup_mma_load_matrix %arg0[%c0, %c0] {operand = "BOp", leadDimension = 16 : index} : memref<16x16xf16> -> !gpu.mmafragment<8, vector<2xf16>>
-      %2 = gpu.subgroup_mma_load_matrix %arg22[%c0, %c0] {operand = "COp", leadDimension = 16 : index} : memref<16x16xf16> -> !gpu.mmafragment<4, vector<2xf16>>
+      %2 = gpu.subgroup_mma_load_matrix %arg22[%c0, %c0] {operand = "COp", leadDimension = 16 : index} : memref<16x16xf32> -> !gpu.mmafragment<8, f32>
 
-      %3 = gpu.subgroup_mma_compute %0, %1, %2 : !gpu.mmafragment<8, vector<2xf16>>, !gpu.mmafragment<8, vector<2xf16>>, !gpu.mmafragment<4, vector<2xf16>> -> !gpu.mmafragment<4, vector<2xf16>>
+      %3 = gpu.subgroup_mma_compute %0, %1, %2 : !gpu.mmafragment<8, vector<2xf16>>, !gpu.mmafragment<8, vector<2xf16>>, !gpu.mmafragment<8, f32> -> !gpu.mmafragment<8, f32>
 
-      gpu.subgroup_mma_store_matrix %3, %arg0[%c0, %c0] {leadDimension = 16 : index}: !gpu.mmafragment<4, vector<2xf16>>, memref<16x16xf16>
+      gpu.subgroup_mma_store_matrix %3, %arg22[%c0, %c0] {leadDimension = 16 : index}: !gpu.mmafragment<8, f32>, memref<16x16xf32>
 
       gpu.return
     }

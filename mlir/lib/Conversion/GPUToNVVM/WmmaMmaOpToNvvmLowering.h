@@ -1,4 +1,4 @@
-//===--- WmmaMmaOptoNVVMLowering.h - MmaOp to NVVM Op lowering -*- C++ -*-===//
+//===--- WmmaMmaOpToNVVMLowering.h - MmaOp to NVVM Op lowering -*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -26,12 +26,12 @@ namespace mlir {
 /// emits code that is necessary to unpack the data from source memrefs to give
 /// them to the NVVM OP and then again pack the results to store them into the
 /// destination memref.
-struct WmmaMmaOptoNVVMLowering
+struct WmmaMmaOpToNVVMLowering
     : public ConvertOpToLLVMPattern<gpu::SubgroupMmaComputeOp> {
 public:
   MLIRContext *context = &this->getTypeConverter()->getContext();
 
-  explicit WmmaMmaOptoNVVMLowering(LLVMTypeConverter &typeConverter)
+  explicit WmmaMmaOpToNVVMLowering(LLVMTypeConverter &typeConverter)
       : ConvertOpToLLVMPattern<gpu::SubgroupMmaComputeOp>(typeConverter),
         llvmTypes(context) {}
 
@@ -56,38 +56,64 @@ public:
 
     Location loc = op->getLoc();
 
-    SmallVector<mlir::VectorType, 4> opTypes;
-    SmallVector<Type, 4> elemTypes;
-    SmallVector<Type, 4> llvmElemTypes;
-    SmallVector<Value, 4> opIndices;
-
     // The wmma.mma intrinsic in llvm requires the operands as individual
     // values. So individual elements from the memrefs need to be extracted and
     // then passed on to the intrinsic call. Emit llvm ops to extract individual
     // values form lowered memrefs.
     SmallVector<Value, 24> unpackedOps;
 
-    auto unpackOp = [&](CommonLLVMTypes::OperandMap op, Value operand) {
-      for (unsigned i = 0, e = llvmTypes.numHalfsInOpFrags[op]; i < e; ++i) {
+    auto unpackOp = [&](CommonLLVMTypes::OperandMap op, Value operand,
+                        unsigned numElems, Type elemType) {
+      for (unsigned i = 0; i < numElems; ++i) {
         Value toUse = rewriter.create<LLVM::ExtractValueOp>(
-            loc, llvmTypes.f16x2Ty, operand, rewriter.getI64ArrayAttr(i));
+            loc, elemType, operand, rewriter.getI64ArrayAttr(i));
         unpackedOps.push_back(toUse);
       }
     };
 
-    unpackOp(llvmTypes.A, operands[0]);
-    unpackOp(llvmTypes.B, operands[1]);
-    unpackOp(llvmTypes.C, operands[2]);
+    if (subgroupMmaComputeOp.opC()
+            .getType()
+            .cast<gpu::MMAFragmentType>()
+            .getElementType() == llvmTypes.f16x2Ty) {
+      unpackOp(llvmTypes.A, operands[0],
+               llvmTypes.numHalfsInOpFrags[llvmTypes.A], llvmTypes.f16x2Ty);
+      unpackOp(llvmTypes.B, operands[1],
+               llvmTypes.numHalfsInOpFrags[llvmTypes.B], llvmTypes.f16x2Ty);
+      unpackOp(llvmTypes.C, operands[2],
+               llvmTypes.numHalfsInOpFrags[llvmTypes.C], llvmTypes.f16x2Ty);
 
-    // Operand holder for wmma.mma.op.
-    ValueRange wmmaMmaOpOperands(unpackedOps);
+      // Operand holder for wmma.mma.op.
+      ValueRange wmmaMmaOpOperands(unpackedOps);
 
-    // Create nvvm.wmma.mma op.
-    NVVM::WMMAMmaOp wmmaMmaOp = rewriter.create<NVVM::WMMAMmaOp>(
-        loc, llvmTypes.fragArrayCDTy, wmmaMmaOpOperands);
+      // Create nvvm.wmma.mma op.
+      NVVM::WMMAMmaF16F16Op wmmaMmaOp = rewriter.create<NVVM::WMMAMmaF16F16Op>(
+          loc, llvmTypes.fragArrayCDTy, wmmaMmaOpOperands);
 
-    rewriter.replaceOp(op, wmmaMmaOp.getResult());
-    return success();
+      rewriter.replaceOp(op, wmmaMmaOp.getResult());
+      return success();
+
+    } else if (subgroupMmaComputeOp.opC()
+                   .getType()
+                   .cast<gpu::MMAFragmentType>()
+                   .getElementType() == llvmTypes.f32Ty) {
+      unpackOp(llvmTypes.A, operands[0],
+               llvmTypes.numHalfsInOpFrags[llvmTypes.A], llvmTypes.f16x2Ty);
+      unpackOp(llvmTypes.B, operands[1],
+               llvmTypes.numHalfsInOpFrags[llvmTypes.B], llvmTypes.f16x2Ty);
+      unpackOp(llvmTypes.C, operands[2], 8, llvmTypes.f32Ty);
+
+      // Operand holder for wmma.mma.op.
+      ValueRange wmmaMmaOpOperands(unpackedOps);
+
+      // Create nvvm.wmma.mma op.
+      NVVM::WMMAMmaF32F32Op wmmaMmaOp = rewriter.create<NVVM::WMMAMmaF32F32Op>(
+          loc, llvmTypes.fragArrayCDF32Ty, wmmaMmaOpOperands);
+
+      rewriter.replaceOp(op, wmmaMmaOp.getResult());
+      return success();
+    }
+
+    return failure();
   }
 
 private:

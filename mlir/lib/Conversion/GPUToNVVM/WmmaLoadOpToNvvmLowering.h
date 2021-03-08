@@ -1,4 +1,4 @@
-//===-- WmmaLoadOptoNVVMLowering.h - MmaLoadOp to NVVM lowering -*- C++ -*-===//
+//===-- WmmaLoadOpToNVVMLowering.h - MmaLoadOp to NVVM lowering -*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -25,12 +25,12 @@ namespace mlir {
 /// in the NVVM dialect. The conversion not only emits the NVVM op but also
 /// emits code that is necessary to store the data in the destination memref
 /// after it has been loaded.
-struct WmmaLoadOptoNVVMLowering
+struct WmmaLoadOpToNVVMLowering
     : public ConvertOpToLLVMPattern<gpu::SubgroupMmaLoadMatrixOp> {
 public:
   MLIRContext *context = &this->getTypeConverter()->getContext();
 
-  explicit WmmaLoadOptoNVVMLowering(LLVMTypeConverter &typeConverter)
+  explicit WmmaLoadOpToNVVMLowering(LLVMTypeConverter &typeConverter)
       : ConvertOpToLLVMPattern<gpu::SubgroupMmaLoadMatrixOp>(typeConverter),
         llvmTypes(context) {}
 
@@ -110,20 +110,20 @@ public:
         loadAddress);
 
     Type resType;
-    unsigned numElemsInResFrag;
     StringRef operandStr = operand.cast<mlir::StringAttr>().getValue();
 
     if (operandStr.equals("AOp") || operandStr.equals("BOp")) {
       resType = llvmTypes.fragArrayABTy;
-      numElemsInResFrag = llvmTypes.numHalfsInOpFrags[llvmTypes.A];
     } else {
-      resType = llvmTypes.fragArrayCDTy;
-      numElemsInResFrag = llvmTypes.numHalfsInOpFrags[llvmTypes.C];
+      if (srcMemrefType.getElementType().isF16())
+	resType = llvmTypes.fragArrayCDTy;
+      else if(srcMemrefType.getElementType().isF32())
+	resType = llvmTypes.fragArrayCDF32Ty;
     }
 
     ValueRange loadOpOperands({loadAddressCasted, leadingDim32});
 
-    // Create nvvm.mma_load op according to the operand.
+    // Create nvvm.mma_load op according to the operand types.
     if (operandStr.equals("AOp")) {
       NVVM::WMMALoadAOp wmmaLoadAOp =
           rewriter.create<NVVM::WMMALoadAOp>(loc, resType, loadOpOperands);
@@ -133,9 +133,15 @@ public:
           rewriter.create<NVVM::WMMALoadBOp>(loc, resType, loadOpOperands);
       rewriter.replaceOp(op, wmmaLoadBOp.getResult());
     } else {
-      NVVM::WMMALoadCOp wmmaLoadCOp =
-          rewriter.create<NVVM::WMMALoadCOp>(loc, resType, loadOpOperands);
-      rewriter.replaceOp(op, wmmaLoadCOp.getResult());
+      if (srcMemrefType.getElementType().isF16()) {
+        NVVM::WMMALoadCF16Op wmmaLoadCOp =
+            rewriter.create<NVVM::WMMALoadCF16Op>(loc, resType, loadOpOperands);
+        rewriter.replaceOp(op, wmmaLoadCOp.getResult());
+      } else if (srcMemrefType.getElementType().isF32()) {
+        NVVM::WMMALoadCF32Op wmmaLoadCOp =
+            rewriter.create<NVVM::WMMALoadCF32Op>(loc, resType, loadOpOperands);
+        rewriter.replaceOp(op, wmmaLoadCOp.getResult());
+      }
     }
 
     return success();

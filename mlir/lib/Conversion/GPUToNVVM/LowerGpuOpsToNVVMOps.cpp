@@ -27,9 +27,9 @@
 #include "../GPUCommon/IndexIntrinsicsOpLowering.h"
 #include "../GPUCommon/OpToFuncCallLowering.h"
 #include "../PassDetail.h"
-#include "WmmaLoadOptoNvvmLowering.h"
-#include "WmmaMmaOptoNvvmLowering.h"
-#include "WmmaStoreOptoNvvmLowering.h"
+#include "WmmaLoadOpToNvvmLowering.h"
+#include "WmmaMmaOpToNvvmLowering.h"
+#include "WmmaStoreOpToNvvmLowering.h"
 
 using namespace mlir;
 
@@ -128,14 +128,25 @@ struct LowerGpuOpsToNVVMOpsPass
     });
 
     converter.addConversion([&](gpu::MMAFragmentType type) -> Type {
-      VectorType vecTy = type.getElementType().cast<VectorType>();
-      unsigned vecSize = vecTy.getDimSize(0);
-      Type vec = VectorType::get(vecSize, FloatType::getF16(&getContext()));
-      unsigned size = type.getSize();
-      SmallVector<Type, 8> elements(size, vec);
-      auto structType =
-          LLVM::LLVMStructType::getLiteral(&getContext(), elements);
-      return structType;
+      if (type.getElementType().isa<VectorType>()) {
+        VectorType vecTy = type.getElementType().cast<VectorType>();
+        unsigned vecSize = vecTy.getDimSize(0);
+        Type vec = VectorType::get(vecSize, FloatType::getF16(&getContext()));
+        unsigned size = type.getSize();
+        SmallVector<Type, 8> elements(size, vec);
+        auto structType =
+            LLVM::LLVMStructType::getLiteral(&getContext(), elements);
+        return structType;
+      } else if (type.getElementType().isa<Float32Type>()) {
+        unsigned size = type.getSize();
+        SmallVector<Type, 8> elements(size, FloatType::getF32(&getContext()));
+        auto structType =
+            LLVM::LLVMStructType::getLiteral(&getContext(), elements);
+        return structType;
+      } else {
+	// Signal failure.
+        return nullptr;
+      }
     });
 
     OwningRewritePatternList patterns, llvmPatterns;
@@ -192,9 +203,9 @@ void mlir::populateGpuToNVVMConversionPatterns(
       Identifier::get(NVVM::NVVMDialect::getKernelFuncAttrName(),
                       &converter.getContext()));
 
-  patterns.insert<WmmaLoadOptoNVVMLowering>(converter);
-  patterns.insert<WmmaMmaOptoNVVMLowering>(converter);
-  patterns.insert<WmmaStoreOptoNVVMLowering>(converter);
+  patterns.insert<WmmaLoadOpToNVVMLowering>(converter);
+  patterns.insert<WmmaMmaOpToNVVMLowering>(converter);
+  patterns.insert<WmmaStoreOpToNVVMLowering>(converter);
   patterns.insert<OpToFuncCallLowering<AbsFOp>>(converter, "__nv_fabsf",
                                                 "__nv_fabs");
   patterns.insert<OpToFuncCallLowering<math::AtanOp>>(converter, "__nv_atanf",

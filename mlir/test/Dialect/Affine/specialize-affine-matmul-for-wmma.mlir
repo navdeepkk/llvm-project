@@ -11,10 +11,8 @@ module  {
     %2 = alloc() : memref<1024x1024xf16>
     affine.for %arg0 = 0 to 1024 step 64 {
       affine.for %arg1 = 0 to 1024 step 64 {
-        %3 = alloca() : memref<64x64xf16, 3>
-        %4 = alloca() : memref<64x64xf16, 3>
-        //%3 = get_global_memref @asmem : memref<64x64xf16, 3>
-        //%4 = get_global_memref @bsmem : memref<64x64xf16, 3>
+        %3 = get_global_memref @asmem : memref<64x64xf16, 3>
+        %4 = get_global_memref @bsmem : memref<64x64xf16, 3>
         affine.for %arg2 = 0 to 1024 step 64 {
           affine.for %arg3 = #map0(%arg2) to #map1(%arg2) {
             affine.for %arg4 = #map0(%arg1) to #map1(%arg1) {
@@ -65,8 +63,8 @@ module  {
 // CHECK-NEXT:     %2 = alloc() : memref<1024x1024xf16>
 // CHECK-NEXT:     affine.parallel (%arg0) = (0) to (1024) step (64) {
 // CHECK-NEXT:       affine.parallel (%arg1) = (0) to (1024) step (64) {
-// CHECK-NEXT:         %3 = alloca() : memref<64x64xf16, 3>
-// CHECK-NEXT:         %4 = alloca() : memref<64x64xf16, 3>
+// CHECK-NEXT:         %3 = get_global_memref @asmem : memref<64x64xf16, 3>
+// CHECK-NEXT:         %4 = get_global_memref @bsmem : memref<64x64xf16, 3>
 // CHECK-NEXT:         affine.parallel (%arg2) = (0) to (64) step (32) {
 // CHECK-NEXT:           affine.parallel (%arg3) = (0) to (64) step (32) {
 // CHECK-NEXT:             %5 = affine.apply #map0(%arg0, %arg2)

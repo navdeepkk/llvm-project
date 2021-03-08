@@ -529,7 +529,7 @@ func @wmmaStoreOp_invalid_mem_space(%arg0 : !gpu.mmafragment<5, vector<2xf16>>) 
     %sg = alloca(){alignment = 32} : memref<32x32xf16, 3>
     %i = constant 16 : index
     %j = constant 16 : index
-    // expected-error @+1 {{operand should be of type !gpu.mmafragment<4xvector<2xf16>>}}
+    // expected-error @+1 {{operand should be of type !gpu.mmafragment<4, vector<2xf16>>}}
     gpu.subgroup_mma_store_matrix %arg0, %sg[%i,%j] {leadDimension= 32 : index} : !gpu.mmafragment<5, vector<2xf16>>, memref<32x32xf16, 3>
     return
 }
@@ -537,7 +537,7 @@ func @wmmaStoreOp_invalid_mem_space(%arg0 : !gpu.mmafragment<5, vector<2xf16>>) 
 // -----
 
 func @wmmaMmaOp_invalid_operand_shape(%A : !gpu.mmafragment<3, vector<2xf16>>, %B : !gpu.mmafragment<8, vector<2xf16>>, %C : !gpu.mmafragment<4, vector<2xf16>>) -> () {
-    // expected-error @+1 {{A and B must be of type !gpu.mmafragment<8xvector<2xf16>> and C must of type !gpu.mmafragment<4xvector<2xf16>>}}
+    // expected-error @+1 {{A and B must be of type !gpu.mmafragment<8, vector<2xf16>> and C must of type !gpu.mmafragment<4, vector<2xf16>> or !gpu.mmafragment<8, f32>>}}
     %D = gpu.subgroup_mma_compute %A, %B, %C : !gpu.mmafragment<3, vector<2xf16>>, !gpu.mmafragment<8, vector<2xf16>>, !gpu.mmafragment<4, vector<2xf16>> -> !gpu.mmafragment<4, vector<2xf16>>
     return
 }

@@ -1,4 +1,4 @@
-//==- WmmaStoreOptoNVVMLoering.h - MmaStoreOp to NVVM Op lowering *- C++ -*-==//
+//==- WmmaStoreOpToNVVMLoering.h - MmaStoreOp to NVVM Op lowering *- C++ -*-==//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -25,12 +25,12 @@ namespace mlir {
 /// in the NVVM dialect. The conversion not only emits the NVVM op but also
 /// emits code that is necessary to unpack the data in the source memref and
 /// convert the data in the format that is needed by the NVVM op.
-struct WmmaStoreOptoNVVMLowering
+struct WmmaStoreOpToNVVMLowering
     : public ConvertOpToLLVMPattern<gpu::SubgroupMmaStoreMatrixOp> {
 public:
   MLIRContext *context = &this->getTypeConverter()->getContext();
 
-  explicit WmmaStoreOptoNVVMLowering(LLVMTypeConverter &typeConverter)
+  explicit WmmaStoreOpToNVVMLowering(LLVMTypeConverter &typeConverter)
       : ConvertOpToLLVMPattern<gpu::SubgroupMmaStoreMatrixOp>(typeConverter),
         llvmTypes(context) {}
 
@@ -110,21 +110,44 @@ public:
     storeOpOperands.push_back(storeAddressCasted);
 
     // Unpack the results from the source memref.
-    for (unsigned i = 0, e = llvmTypes.numHalfsInOpFrags[llvmTypes.D]; i < e;
-         ++i) {
-      Value toUse = rewriter.create<LLVM::ExtractValueOp>(
-          loc, llvmTypes.f16x2Ty, operands[0], rewriter.getI64ArrayAttr(i));
-      storeOpOperands.push_back(toUse);
+    if (subgroupMmaStoreMatrixOp.src()
+            .getType()
+            .cast<gpu::MMAFragmentType>()
+            .getElementType() == llvmTypes.f16x2Ty) {
+      for (unsigned i = 0, e = llvmTypes.numHalfsInOpFrags[llvmTypes.D]; i < e;
+           ++i) {
+        Value toUse = rewriter.create<LLVM::ExtractValueOp>(
+            loc, llvmTypes.f16x2Ty, operands[0], rewriter.getI64ArrayAttr(i));
+        storeOpOperands.push_back(toUse);
+      }
+      storeOpOperands.push_back(leadingDim32);
+
+      // Create nvvm.mma_store op.
+      ValueRange unpackedValueRange(storeOpOperands);
+      rewriter.create<NVVM::WMMAStoreF16Op>(loc, storeOpOperands);
+
+      rewriter.eraseOp(op);
+      return success();
+    } else if (subgroupMmaStoreMatrixOp.src()
+                   .getType()
+                   .cast<gpu::MMAFragmentType>()
+                   .getElementType() == llvmTypes.f32Ty) {
+      for (unsigned i = 0, e = 8; i < e; ++i) {
+        Value toUse = rewriter.create<LLVM::ExtractValueOp>(
+            loc, llvmTypes.f32Ty, operands[0], rewriter.getI64ArrayAttr(i));
+        storeOpOperands.push_back(toUse);
+      }
+      storeOpOperands.push_back(leadingDim32);
+
+      // Create nvvm.mma_store op.
+      ValueRange unpackedValueRange(storeOpOperands);
+      rewriter.create<NVVM::WMMAStoreF32Op>(loc, storeOpOperands);
+
+      rewriter.eraseOp(op);
+      return success();
     }
 
-    storeOpOperands.push_back(leadingDim32);
-
-    // Create nvvm.mma_store op.
-    ValueRange unpackedValueRange(storeOpOperands);
-    rewriter.create<NVVM::WMMAStoreOp>(loc, storeOpOperands);
-
-    rewriter.eraseOp(op);
-    return success();
+    return failure();
   }
 
 private:

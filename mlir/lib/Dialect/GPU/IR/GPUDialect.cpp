@@ -52,7 +52,7 @@ bool MMAFragmentType::isValidElementType(Type elementType) {
   if (auto vectorElemType = elementType.dyn_cast<VectorType>())
     return vectorElemType.getRank() == 1 && vectorElemType.getDimSize(0) == 2;
   else
-    return false;
+    return elementType.isa<mlir::Float32Type>();
 }
 
 LogicalResult MMAFragmentType::verify(function_ref<InFlightDiagnostic()> emitError,
@@ -62,7 +62,7 @@ LogicalResult MMAFragmentType::verify(function_ref<InFlightDiagnostic()> emitErr
     return emitError() << "MMAFragmentType size must be atleast one";
 
   if (!MMAFragmentType::isValidElementType(elementType))
-    return emitError() << "MMAFragmentType elements must be vector<2xf16>";
+    return emitError() << "MMAFragmentType elements must be vector<2xf16> or f32";
 
   return success();
 }
@@ -117,7 +117,7 @@ Type GPUDialect::parseType(DialectAsmParser &parser) const {
 
     // Parse the size and elementType.
     int64_t size;
-    VectorType elementType;
+    Type elementType;
     if (parser.parseInteger(size) || parser.parseComma() ||
         parser.parseType(elementType)) {
       return nullptr;
@@ -1010,9 +1010,15 @@ static LogicalResult verify(SubgroupMmaStoreMatrixOp op) {
         "destination memorySpace of kGenericMemorySpace, "
         "kGlobalMemorySpace or kSharedMemorySpace only allowed");
 
-  if (srcFragType.getSize() != 4)
-    return op.emitError(
-        "operand should be of type !gpu.mmafragment<4xvector<2xf16>>");
+  if(srcFragType.getElementType().isa<VectorType>()) {
+    if (srcFragType.getSize() != 4)
+      return op.emitError(
+        "operand should be of type !gpu.mmafragment<4, vector<2xf16>>");
+  } else if(srcFragType.getElementType().isa<Float32Type>()) {
+    if(srcFragType.getSize() != 8)
+      return op.emitError(
+        "operand should be of type !gpu.mmafragment<8, f32>");
+  }
 
   return success();
 }
@@ -1037,17 +1043,25 @@ static LogicalResult verify(SubgroupMmaComputeOp op) {
   };
   populateOpInfo();
 
-  auto isValidElementType = [](Type &elemType, MMAFragmentType &fragTy,
-                               unsigned numElems) {
-    return fragTy.getSize() == numElems;
+  auto isValidElementType = [](OperandMap op, Type &elemType, MMAFragmentType &fragTy,
+                               ArrayRef<unsigned> numElems) {
+    if(op == A || op == B)
+      return fragTy.getSize() == numElems[0];
+    else {
+      if(elemType.isa<VectorType>())
+	return fragTy.getSize() == numElems[0];
+      else if(elemType.isa<Float32Type>())
+	return fragTy.getSize() == numElems[1];	
+    }
+    return false;
   };
 
-  if (!isValidElementType(elemTypes[A], opTypes[A], 8) ||
-      !isValidElementType(elemTypes[B], opTypes[B], 8) ||
-      !isValidElementType(elemTypes[C], opTypes[C], 4))
+  if (!isValidElementType(A, elemTypes[A], opTypes[A], 8) ||
+      !isValidElementType(B, elemTypes[B], opTypes[B], 8) ||
+      !isValidElementType(C, elemTypes[C], opTypes[C], {4, 8}))
     return op.emitError(
-        "A and B must be of type !gpu.mmafragment<8xvector<2xf16>> and C "
-        "must of type !gpu.mmafragment<4xvector<2xf16>>");
+        "A and B must be of type !gpu.mmafragment<8, vector<2xf16>> and C "
+        "must of type !gpu.mmafragment<4, vector<2xf16>> or !gpu.mmafragment<8, f32>>");
 
   return success();
 }
