@@ -116,12 +116,12 @@ public:
       resType = llvmTypes.fragArrayABTy;
     } else {
       if (srcMemrefType.getElementType().isF16())
-	resType = llvmTypes.fragArrayCDTy;
-      else if(srcMemrefType.getElementType().isF32())
-	resType = llvmTypes.fragArrayCDF32Ty;
+        resType = llvmTypes.fragArrayCDTy;
+      else if (srcMemrefType.getElementType().isF32())
+        resType = llvmTypes.fragArrayCDF32Ty;
     }
 
-    ValueRange loadOpOperands({loadAddressCasted, leadingDim32});
+    SmallVector<Value, 2> loadOpOperands({loadAddressCasted, leadingDim32});
 
     // Create nvvm.mma_load op according to the operand types.
     if (operandStr.equals("AOp")) {
