@@ -116,9 +116,9 @@ public:
       resType = llvmTypes.fragArrayABTy;
     } else {
       if (srcMemrefType.getElementType().isF16())
-	resType = llvmTypes.fragArrayCDTy;
-      else if(srcMemrefType.getElementType().isF32())
-	resType = llvmTypes.fragArrayCDF32Ty;
+        resType = llvmTypes.fragArrayCDTy;
+      else if (srcMemrefType.getElementType().isF32())
+        resType = llvmTypes.fragArrayCDF32Ty;
     }
 
     SmallVector<Value, 2> loadOpOperands({loadAddressCasted, leadingDim32});
