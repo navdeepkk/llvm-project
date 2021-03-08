@@ -1,4 +1,4 @@
-//===--- WmmaMmaOptoNVVMLowering.h - MmaOp to NVVM Op lowering -*- C++ -*-===//
+//===--- WmmaMmaOpToNVVMLowering.h - MmaOp to NVVM Op lowering -*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -26,12 +26,12 @@ namespace mlir {
 /// emits code that is necessary to unpack the data from source memrefs to give
 /// them to the NVVM OP and then again pack the results to store them into the
 /// destination memref.
-struct WmmaMmaOptoNVVMLowering
+struct WmmaMmaOpToNVVMLowering
     : public ConvertOpToLLVMPattern<gpu::SubgroupMmaComputeOp> {
 public:
   MLIRContext *context = &this->getTypeConverter()->getContext();
 
-  explicit WmmaMmaOptoNVVMLowering(LLVMTypeConverter &typeConverter)
+  explicit WmmaMmaOpToNVVMLowering(LLVMTypeConverter &typeConverter)
       : ConvertOpToLLVMPattern<gpu::SubgroupMmaComputeOp>(typeConverter),
         llvmTypes(context) {}
 

@@ -1,4 +1,4 @@
-//==- WmmaStoreOptoNVVMLoering.h - MmaStoreOp to NVVM Op lowering *- C++ -*-==//
+//==- WmmaStoreOpToNVVMLoering.h - MmaStoreOp to NVVM Op lowering *- C++ -*-==//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -25,12 +25,12 @@ namespace mlir {
 /// in the NVVM dialect. The conversion not only emits the NVVM op but also
 /// emits code that is necessary to unpack the data in the source memref and
 /// convert the data in the format that is needed by the NVVM op.
-struct WmmaStoreOptoNVVMLowering
+struct WmmaStoreOpToNVVMLowering
     : public ConvertOpToLLVMPattern<gpu::SubgroupMmaStoreMatrixOp> {
 public:
   MLIRContext *context = &this->getTypeConverter()->getContext();
 
-  explicit WmmaStoreOptoNVVMLowering(LLVMTypeConverter &typeConverter)
+  explicit WmmaStoreOpToNVVMLowering(LLVMTypeConverter &typeConverter)
       : ConvertOpToLLVMPattern<gpu::SubgroupMmaStoreMatrixOp>(typeConverter),
         llvmTypes(context) {}
 

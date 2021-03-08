@@ -1,4 +1,4 @@
-//===-- WmmaLoadOptoNVVMLowering.h - MmaLoadOp to NVVM lowering -*- C++ -*-===//
+//===-- WmmaLoadOpToNVVMLowering.h - MmaLoadOp to NVVM lowering -*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -25,12 +25,12 @@ namespace mlir {
 /// in the NVVM dialect. The conversion not only emits the NVVM op but also
 /// emits code that is necessary to store the data in the destination memref
 /// after it has been loaded.
-struct WmmaLoadOptoNVVMLowering
+struct WmmaLoadOpToNVVMLowering
     : public ConvertOpToLLVMPattern<gpu::SubgroupMmaLoadMatrixOp> {
 public:
   MLIRContext *context = &this->getTypeConverter()->getContext();
 
-  explicit WmmaLoadOptoNVVMLowering(LLVMTypeConverter &typeConverter)
+  explicit WmmaLoadOpToNVVMLowering(LLVMTypeConverter &typeConverter)
       : ConvertOpToLLVMPattern<gpu::SubgroupMmaLoadMatrixOp>(typeConverter),
         llvmTypes(context) {}
 

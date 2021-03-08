@@ -27,9 +27,9 @@
 #include "../GPUCommon/IndexIntrinsicsOpLowering.h"
 #include "../GPUCommon/OpToFuncCallLowering.h"
 #include "../PassDetail.h"
-#include "WmmaLoadOptoNvvmLowering.h"
-#include "WmmaMmaOptoNvvmLowering.h"
-#include "WmmaStoreOptoNvvmLowering.h"
+#include "WmmaLoadOpToNvvmLowering.h"
+#include "WmmaMmaOpToNvvmLowering.h"
+#include "WmmaStoreOpToNvvmLowering.h"
 
 using namespace mlir;
 
@@ -203,9 +203,9 @@ void mlir::populateGpuToNVVMConversionPatterns(
       Identifier::get(NVVM::NVVMDialect::getKernelFuncAttrName(),
                       &converter.getContext()));
 
-  patterns.insert<WmmaLoadOptoNVVMLowering>(converter);
-  patterns.insert<WmmaMmaOptoNVVMLowering>(converter);
-  patterns.insert<WmmaStoreOptoNVVMLowering>(converter);
+  patterns.insert<WmmaLoadOpToNVVMLowering>(converter);
+  patterns.insert<WmmaMmaOpToNVVMLowering>(converter);
+  patterns.insert<WmmaStoreOpToNVVMLowering>(converter);
   patterns.insert<OpToFuncCallLowering<AbsFOp>>(converter, "__nv_fabsf",
                                                 "__nv_fabs");
   patterns.insert<OpToFuncCallLowering<math::AtanOp>>(converter, "__nv_atanf",
