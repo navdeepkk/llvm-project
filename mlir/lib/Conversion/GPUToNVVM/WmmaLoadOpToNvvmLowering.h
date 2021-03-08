@@ -121,7 +121,7 @@ public:
 	resType = llvmTypes.fragArrayCDF32Ty;
     }
 
-    ValueRange loadOpOperands({loadAddressCasted, leadingDim32});
+    SmallVector<Value, 2> loadOpOperands({loadAddressCasted, leadingDim32});
 
     // Create nvvm.mma_load op according to the operand types.
     if (operandStr.equals("AOp")) {
