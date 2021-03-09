@@ -109,7 +109,7 @@ public:
     SmallVector<Value, 4> storeOpOperands;
     storeOpOperands.push_back(storeAddressCasted);
 
-    // Unpack the results from the source memref.
+    // Unpack the results from the source.
     if (subgroupMmaStoreMatrixOp.src()
             .getType()
             .cast<gpu::MMAFragmentType>()
@@ -123,7 +123,6 @@ public:
       storeOpOperands.push_back(leadingDim32);
 
       // Create nvvm.mma_store op.
-      ValueRange unpackedValueRange(storeOpOperands);
       rewriter.create<NVVM::WMMAStoreF16Op>(loc, storeOpOperands);
 
       rewriter.eraseOp(op);
@@ -140,7 +139,6 @@ public:
       storeOpOperands.push_back(leadingDim32);
 
       // Create nvvm.mma_store op.
-      ValueRange unpackedValueRange(storeOpOperands);
       rewriter.create<NVVM::WMMAStoreF32Op>(loc, storeOpOperands);
 
       rewriter.eraseOp(op);
