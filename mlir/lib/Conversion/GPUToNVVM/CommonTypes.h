@@ -45,9 +45,8 @@ public:
     fragArrayABPtrTy = LLVM::LLVMPointerType::get(fragArrayABTy);
     fragArrayCDTy = LLVM::LLVMStructType::getLiteral(
         context, SmallVector<Type>(4, f16x2Ty));
-    fragArrayCDF32Ty = LLVM::LLVMStructType::getLiteral(
-        context, SmallVector<Type>(8, f32Ty));
-    fragArrayCDPtrTy = LLVM::LLVMPointerType::get(fragArrayCDTy);
+    fragArrayCDF32Ty =
+        LLVM::LLVMStructType::getLiteral(context, SmallVector<Type>(8, f32Ty));
   };
 
   Type int8Type;
@@ -60,11 +59,18 @@ public:
   Type f16x2Ty;
   Type f16x8Ty;
   Type f16x16Ty;
+  /// Type for the fragment of A and B operands that a single thread holds for
+  /// fp16 data type.
   Type fragArrayABTy;
+  /// Type for a pointer to the fragment of `AB` operands that a single thread
+  /// holds for fp16 data type.
   Type fragArrayABPtrTy;
+  /// Type for the fragment of C and D operands that a single thread holds for
+  /// fp16 data type.
   Type fragArrayCDTy;
+  /// Type for the fragment of C and D operands that a single thread holds for
+  /// fp32 data type.
   Type fragArrayCDF32Ty;
-  Type fragArrayCDPtrTy;
   SmallVector<unsigned, 4> numHalfsInOpFrags;
   enum OperandMap { A, B, C, D };
 };
