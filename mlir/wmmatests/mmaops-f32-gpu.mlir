@@ -1,3 +1,5 @@
+//mlir-opt mmaops-f32-gpu.mlir --gpu-kernel-outlining --canonicalize
+
 module  {
   global_memref @asmem : memref<64x64xf16, 3>
   global_memref @bsmem : memref<64x64xf16, 3>

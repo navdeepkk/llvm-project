@@ -1,3 +1,5 @@
+// mlir-opt mmaops-f32-scf-mapped.mlir --test-convert-matmul-parallel-loops-to-gpu  --canonicalize
+
 #map = affine_map<(d0) -> (d0)>
 module  {
   global_memref @asmem : memref<64x64xf16, 3>

@@ -1,3 +1,5 @@
+// mlir-opt mmaops-f32-affine-collapsed.mlir --lower-affine --canonicalize
+
 #map0 = affine_map<(d0, d1) -> (d0 + d1)>
 #map1 = affine_map<(d0, d1) -> (d0 + d1 + 16)>
 #map2 = affine_map<(d0) -> (d0 + 16)>
