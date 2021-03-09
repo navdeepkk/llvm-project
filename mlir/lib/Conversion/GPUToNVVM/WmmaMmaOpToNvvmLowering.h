@@ -82,12 +82,9 @@ public:
       unpackOp(llvmTypes.C, operands[2],
                llvmTypes.numHalfsInOpFrags[llvmTypes.C], llvmTypes.f16x2Ty);
 
-      // Operand holder for wmma.mma.op.
-      ValueRange wmmaMmaOpOperands(unpackedOps);
-
       // Create nvvm.wmma.mma op.
       NVVM::WMMAMmaF16F16Op wmmaMmaOp = rewriter.create<NVVM::WMMAMmaF16F16Op>(
-          loc, llvmTypes.fragArrayCDTy, wmmaMmaOpOperands);
+          loc, llvmTypes.fragArrayCDTy, unpackedOps);
 
       rewriter.replaceOp(op, wmmaMmaOp.getResult());
       return success();
@@ -102,12 +99,9 @@ public:
                llvmTypes.numHalfsInOpFrags[llvmTypes.B], llvmTypes.f16x2Ty);
       unpackOp(llvmTypes.C, operands[2], 8, llvmTypes.f32Ty);
 
-      // Operand holder for wmma.mma.op.
-      ValueRange wmmaMmaOpOperands(unpackedOps);
-
       // Create nvvm.wmma.mma op.
       NVVM::WMMAMmaF32F32Op wmmaMmaOp = rewriter.create<NVVM::WMMAMmaF32F32Op>(
-          loc, llvmTypes.fragArrayCDF32Ty, wmmaMmaOpOperands);
+          loc, llvmTypes.fragArrayCDF32Ty, unpackedOps);
 
       rewriter.replaceOp(op, wmmaMmaOp.getResult());
       return success();
