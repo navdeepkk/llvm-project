@@ -119,6 +119,8 @@ public:
         resType = llvmTypes.fragArrayCDTy;
       else if (srcMemrefType.getElementType().isF32())
         resType = llvmTypes.fragArrayCDF32Ty;
+      else
+	return failure();
     }
 
     SmallVector<Value, 2> loadOpOperands({loadAddressCasted, leadingDim32});
