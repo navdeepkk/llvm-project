@@ -42,6 +42,11 @@
 
 using namespace mlir;
 
+static llvm::cl::opt<unsigned>
+    clMaxRegPerThread("max-reg-per-thread",
+                 llvm::cl::desc("Max number of registers that a thread may use"),
+                 llvm::cl::init(24));
+
 static void emitCudaError(const llvm::Twine &expr, const char *buffer,
                           CUresult result, Location loc) {
   const char *error;
@@ -83,14 +88,17 @@ OwnedBlob compilePtxToCubin(const std::string ptx, Location loc,
                                     jitOptions,     /* jit options */
                                     jitOptionsVals, /* jit option values */
                                     &linkState));
+  
+  CUjit_option extraJitOptions[] = {CU_JIT_MAX_REGISTERS};
+  void *extraJitOptionsVals[] = {reinterpret_cast<void *>(clMaxRegPerThread.getValue())};
 
   RETURN_ON_CUDA_ERROR(
       cuLinkAddData(linkState, CUjitInputType::CU_JIT_INPUT_PTX,
                     const_cast<void *>(static_cast<const void *>(ptx.c_str())),
                     ptx.length(), name.str().data(), /* kernel name */
-                    0,                               /* number of jit options */
-                    nullptr,                         /* jit options */
-                    nullptr                          /* jit option values */
+                    1,                               /* number of jit options */
+                    extraJitOptions,                         /* jit options */
+                    extraJitOptionsVals                      /* jit option values */
                     ));
 
   void *cubinData;
