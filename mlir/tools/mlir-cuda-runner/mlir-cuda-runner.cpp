@@ -146,9 +146,10 @@ struct GpuToCubinPipelineOptions
       llvm::cl::desc("Annotation attribute string for GPU binary")};
 };
 
+/// SM version. The default version `sm_75` corresponds to Turing.
 static llvm::cl::opt<std::string>
     clSMVersion("sm", llvm::cl::desc("SM version to target"),
-                llvm::cl::init("sm_35"));
+                llvm::cl::init("sm_75"));
 
 static llvm::cl::opt<unsigned>
     clIndexWidth("index-bitwidth",
