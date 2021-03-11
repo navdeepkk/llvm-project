@@ -136,16 +136,16 @@ struct LowerGpuOpsToNVVMOpsPass
         auto structType =
             LLVM::LLVMStructType::getLiteral(&getContext(), elements);
         return structType;
-      } else if (type.getElementType().isa<Float32Type>()) {
+      }
+      if (type.getElementType().isa<Float32Type>()) {
         unsigned size = type.getSize();
         SmallVector<Type, 8> elements(size, FloatType::getF32(&getContext()));
         auto structType =
             LLVM::LLVMStructType::getLiteral(&getContext(), elements);
         return structType;
-      } else {
-	// Signal failure.
-        return nullptr;
       }
+      // Signal failure.
+      return nullptr;
     });
 
     OwningRewritePatternList patterns, llvmPatterns;
