@@ -37,15 +37,21 @@
 
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include "cuda.h"
 
 using namespace mlir;
 
-static llvm::cl::opt<unsigned>
-    clMaxRegPerThread("max-reg-per-thread",
-                 llvm::cl::desc("Max number of registers that a thread may use"),
-                 llvm::cl::init(24));
+static llvm::cl::opt<unsigned> clMaxRegPerThread(
+    "max-reg-per-thread",
+    llvm::cl::desc("Max number of registers that a thread may use"),
+    llvm::cl::init(24));
+
+static llvm::cl::opt<bool>
+    clDumpCubin("dump-cubin",
+                llvm::cl::desc("Dump cubin for each gpu.func region"),
+                llvm::cl::init(false));
 
 static void emitCudaError(const llvm::Twine &expr, const char *buffer,
                           CUresult result, Location loc) {
@@ -88,17 +94,18 @@ OwnedBlob compilePtxToCubin(const std::string ptx, Location loc,
                                     jitOptions,     /* jit options */
                                     jitOptionsVals, /* jit option values */
                                     &linkState));
-  
+
   CUjit_option extraJitOptions[] = {CU_JIT_MAX_REGISTERS};
-  void *extraJitOptionsVals[] = {reinterpret_cast<void *>(clMaxRegPerThread.getValue())};
+  void *extraJitOptionsVals[] = {
+      reinterpret_cast<void *>(clMaxRegPerThread.getValue())};
 
   RETURN_ON_CUDA_ERROR(
       cuLinkAddData(linkState, CUjitInputType::CU_JIT_INPUT_PTX,
                     const_cast<void *>(static_cast<const void *>(ptx.c_str())),
                     ptx.length(), name.str().data(), /* kernel name */
                     1,                               /* number of jit options */
-                    extraJitOptions,                         /* jit options */
-                    extraJitOptionsVals                      /* jit option values */
+                    extraJitOptions,                 /* jit options */
+                    extraJitOptionsVals              /* jit option values */
                     ));
 
   void *cubinData;
@@ -108,6 +115,22 @@ OwnedBlob compilePtxToCubin(const std::string ptx, Location loc,
   char *cubinAsChar = static_cast<char *>(cubinData);
   OwnedBlob result =
       std::make_unique<std::vector<char>>(cubinAsChar, cubinAsChar + cubinSize);
+
+  if (clDumpCubin.getValue() == true) {
+    std::error_code EC;
+    std::string fNameString(name.data());
+
+    llvm::raw_fd_ostream OS(fNameString + ".cubin", EC,
+                            llvm::sys::fs::OpenFlags::F_None);
+    if (EC)
+      llvm::errs() << EC.message() << "error in opening file: " << fNameString
+                   << ".cubin";
+
+    for (unsigned i = 0; i < cubinSize; ++i)
+      OS << cubinAsChar[i];
+
+    OS.close();
+  }
 
   // This will also destroy the cubin data.
   RETURN_ON_CUDA_ERROR(cuLinkDestroy(linkState));
@@ -140,10 +163,11 @@ static void registerCudaRunnerPasses() {
         pm.addPass(createGpuKernelOutliningPass());
         auto &kernelPm = pm.nest<gpu::GPUModuleOp>();
         kernelPm.addPass(createStripDebugInfoPass());
-        kernelPm.addPass(createLowerGpuOpsToNVVMOpsPass(clIndexWidth.getValue()));
-	kernelPm.addPass(createConvertGPUKernelToBlobPass(
-	    translateModuleToLLVMIR, compilePtxToCubin, "nvptx64-nvidia-cuda",
-	    clSMVersion.getValue(), "+ptx60", options.gpuBinaryAnnotation));
+        kernelPm.addPass(
+            createLowerGpuOpsToNVVMOpsPass(clIndexWidth.getValue()));
+        kernelPm.addPass(createConvertGPUKernelToBlobPass(
+            translateModuleToLLVMIR, compilePtxToCubin, "nvptx64-nvidia-cuda",
+            clSMVersion.getValue(), "+ptx60", options.gpuBinaryAnnotation));
       });
   registerGPUPasses();
   registerGpuToLLVMConversionPassPass();
