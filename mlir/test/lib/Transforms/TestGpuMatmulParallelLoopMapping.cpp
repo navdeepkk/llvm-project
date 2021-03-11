@@ -10,18 +10,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/GPU/ParallelLoopMapper.h"
-#include "mlir/Transforms/LoopUtils.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Dialect/GPU/ParallelLoopMapper.h"
 #include "mlir/Dialect/GPU/Passes.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Dialect/GPU/ParallelLoopMapperAttr.cpp.inc"
-#include "mlir/Dialect/GPU/ParallelLoopMapperEnums.cpp.inc"
-#include "mlir/Dialect/GPU/ParallelLoopMapper.h"
-#include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/LoopUtils.h"
 
 using namespace mlir;
 using namespace mlir::gpu;
