@@ -88,11 +88,12 @@ public:
 
       rewriter.replaceOp(op, wmmaMmaOp.getResult());
       return success();
+    }
 
-    } else if (subgroupMmaComputeOp.opC()
-                   .getType()
-                   .cast<gpu::MMAFragmentType>()
-                   .getElementType() == llvmTypes.f32Ty) {
+    if (subgroupMmaComputeOp.opC()
+            .getType()
+            .cast<gpu::MMAFragmentType>()
+            .getElementType() == llvmTypes.f32Ty) {
       unpackOp(llvmTypes.A, operands[0],
                llvmTypes.numHalfsInOpFrags[llvmTypes.A], llvmTypes.f16x2Ty);
       unpackOp(llvmTypes.B, operands[1],
@@ -111,7 +112,7 @@ public:
   }
 
 private:
-  /// Contains definitions of all the LLVM types which are used for lowering
+  /// Definitions of all the LLVM types which are used for lowering
   /// this GPU subgroupMmaComputeOp.
   CommonLLVMTypes llvmTypes;
 };

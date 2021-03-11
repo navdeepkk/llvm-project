@@ -127,10 +127,11 @@ public:
 
       rewriter.eraseOp(op);
       return success();
-    } else if (subgroupMmaStoreMatrixOp.src()
-                   .getType()
-                   .cast<gpu::MMAFragmentType>()
-                   .getElementType() == llvmTypes.f32Ty) {
+    }
+    if (subgroupMmaStoreMatrixOp.src()
+            .getType()
+            .cast<gpu::MMAFragmentType>()
+            .getElementType() == llvmTypes.f32Ty) {
       for (unsigned i = 0, e = 8; i < e; ++i) {
         Value toUse = rewriter.create<LLVM::ExtractValueOp>(
             loc, llvmTypes.f32Ty, operands[0], rewriter.getI64ArrayAttr(i));
@@ -149,8 +150,8 @@ public:
   }
 
 private:
-  /// Contains definitions of all the LLVM types which are used for lowering
-  /// this GPU SubgroupMmaStoreMatrixOp.
+  /// Definitions of all the LLVM types which are used for lowering this GPU
+  /// SubgroupMmaStoreMatrixOp.
   CommonLLVMTypes llvmTypes;
 };
 } // namespace mlir
