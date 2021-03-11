@@ -27,9 +27,8 @@
 #include "../GPUCommon/IndexIntrinsicsOpLowering.h"
 #include "../GPUCommon/OpToFuncCallLowering.h"
 #include "../PassDetail.h"
-#include "WmmaLoadOpToNvvmLowering.h"
+#include "WmmaLoadStoreToNvvmLowering.h"
 #include "WmmaMmaOpToNvvmLowering.h"
-#include "WmmaStoreOpToNvvmLowering.h"
 
 using namespace mlir;
 
