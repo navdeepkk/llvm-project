@@ -1,4 +1,4 @@
-// mlir-opt affine-multi-tiled.mlir --test-specialize-affine-matmul-for-wmma=accum=f32 --canonicalize
+// RUN: mlir-opt %s --test-specialize-affine-matmul-for-wmma=accum=f32 --canonicalize
 
 #map0 = affine_map<(d0) -> (d0)>
 #map1 = affine_map<(d0) -> (d0 + 64)>
