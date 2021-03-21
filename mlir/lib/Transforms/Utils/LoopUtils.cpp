@@ -3148,7 +3148,9 @@ static Value createVectorMemRef(Value scalMemRef, unsigned vectorWidth) {
   if (vecMemRefShape.back() != -1)
     vecMemRefShape.back() /= vectorWidth;
 
-  auto vecMemRefType = MemRefType::get(vecMemRefShape, vecMemRefEltType);
+  auto vecMemRefType = MemRefType::get(vecMemRefShape, vecMemRefEltType,
+                                       /*affineMapComposition=*/{},
+                                       scalMemRefType.getMemorySpaceAsInt());
 
   // FIXME: we are using a shape cast here, but we do not know whether the base
   // memref is aligned to the right boundary. The load/stores on cast memref (of
