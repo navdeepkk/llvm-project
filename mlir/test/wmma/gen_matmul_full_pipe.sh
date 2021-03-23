@@ -1,3 +1,6 @@
+#!/bin/bash
+
+# This file generates IR for matmul to run on Nvidia GPUs using tensor cores. The generated IR is currently the starting point for testing out the full code generation pipeline.
 echo "func @main() {
   %c16_f = constant 16.0e+00 : f16
   %f0 = constant 0.0e+00 : f32

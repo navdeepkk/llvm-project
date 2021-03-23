@@ -1,3 +1,6 @@
+#!/bin/bash
+
+# This file generates IR for naive matmul for GPU targets.
 echo "module attributes {gpu.container_module} {
   func @main() {
     %cst = constant 1.000000e+00 : f16
