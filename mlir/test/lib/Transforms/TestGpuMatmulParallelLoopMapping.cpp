@@ -1,4 +1,4 @@
-//===- ParallelLoopMapper.cpp - Utilities for mapping parallel loops to GPU =//
+//===---------------- TestGpuMatmulParallelLoopMapping.cpp ----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements pass to map parallel loops to GPU devices.
+// This file implements pass to map parallel loops to GPU devices for matmul.
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,7 +31,8 @@ namespace {
 struct TestGpuMatmulParallelLoopMapping
     : public PassWrapper<TestGpuMatmulParallelLoopMapping, FunctionPass> {
   TestGpuMatmulParallelLoopMapping() = default;
-  TestGpuMatmulParallelLoopMapping(const TestGpuMatmulParallelLoopMapping &pass) {}
+  TestGpuMatmulParallelLoopMapping(
+      const TestGpuMatmulParallelLoopMapping &pass) {}
   void runOnFunction() override;
 };
 
@@ -43,9 +44,9 @@ static constexpr int kNumHardwareIds = 3;
 
 static StringRef getMappingAttributeName() { return "mapping"; }
 
-static ParallelLoopDimMapping getParallelLoopDimMappingAttribute(Processor processor,
-                                                     AffineMap map,
-                                                     AffineMap bound) {
+static ParallelLoopDimMapping
+getParallelLoopDimMappingAttribute(Processor processor, AffineMap map,
+                                   AffineMap bound) {
   MLIRContext *context = map.getContext();
   OpBuilder builder(context);
   return ParallelLoopDimMapping::get(
@@ -54,8 +55,9 @@ static ParallelLoopDimMapping getParallelLoopDimMappingAttribute(Processor proce
 }
 
 /// Sets mapping attribute `mapping` as an attribute of `ploopOp`.
-static LogicalResult setMappingAttribute(scf::ParallelOp ploopOp,
-                             ArrayRef<ParallelLoopDimMapping> mapping) {
+static LogicalResult
+setMappingAttribute(scf::ParallelOp ploopOp,
+                    ArrayRef<ParallelLoopDimMapping> mapping) {
   // Verify that each processor is mapped to only once.
   llvm::DenseSet<gpu::Processor> specifiedMappings;
   for (auto dimAttr : mapping) {
@@ -83,8 +85,7 @@ static MappingLevel &operator++(MappingLevel &mappingLevel) {
 /// Computed the hardware id to use for a given mapping level. Will
 /// assign x,y and z hardware ids for the first 3 dimensions and use
 /// sequential after.
-static Processor getHardwareIdForMapping(MappingLevel level,
-                                              int dimension) {
+static Processor getHardwareIdForMapping(MappingLevel level, int dimension) {
 
   if (dimension >= kNumHardwareIds || level == Sequential)
     return Processor::Sequential;
@@ -101,7 +102,7 @@ static Processor getHardwareIdForMapping(MappingLevel level,
       return Processor::Sequential;
     }
     break;
-    case MapWarp:
+  case MapWarp:
     switch (dimension) {
     case 0:
       return Processor::WarpX;
@@ -113,7 +114,7 @@ static Processor getHardwareIdForMapping(MappingLevel level,
       return Processor::Sequential;
     }
     break;
-    case MapBlock:
+  case MapBlock:
     switch (dimension) {
     case 0:
       return Processor::ThreadX;
@@ -132,24 +133,23 @@ static Processor getHardwareIdForMapping(MappingLevel level,
 /// Checks if `loop` is a copy loop/loop nest or not. Here we have taken a
 /// conservative approach for identifying copy loop. We define a loop as a
 /// copy loop if it consists of exactly one load op and one store op.
-static bool isCopyLoop(ParallelOp loop){
+static bool isCopyLoop(ParallelOp loop) {
   unsigned numLoad = 0, numStore = 0;
-  loop.walk([&](LoadOp load){
-      if (load)
-	numLoad++;
-      });
-  loop.walk([&](StoreOp store){
-      if (store)
-	numStore++;
-      });
+  loop.walk([&](LoadOp load) {
+    if (load)
+      numLoad++;
+  });
+  loop.walk([&](StoreOp store) {
+    if (store)
+      numStore++;
+  });
   if (numLoad == 1 && numStore == 1)
     return true;
   return false;
 }
 
-
 /// Collapses a n-dimensional parallel loop into a 1-d parallel loop.
-static ParallelOp collapseParallelLoop(ParallelOp parallelLoop){
+static ParallelOp collapseParallelLoop(ParallelOp parallelLoop) {
   // `combinedDimensions` stores all the dimensions of parallel loop which has
   // to be collapsed.
   std::vector<unsigned> combinedDimensions;
@@ -167,12 +167,12 @@ static void mapParallelOp(ParallelOp parallelOp,
   // Do not try to add a mapping to already mapped loops or nested loops (if
   // it is not a copy loop).
   if (parallelOp->getAttr(getMappingAttributeName()) ||
-      ((mappingLevel == MapGrid) && parallelOp->getParentOfType<ParallelOp>()
-       && !isCopyLoop(parallelOp)))
+      ((mappingLevel == MapGrid) && parallelOp->getParentOfType<ParallelOp>() &&
+       !isCopyLoop(parallelOp)))
     return;
 
   // The copy loop nests are mapped to the thread blocks.
-  if (isCopyLoop(parallelOp)){
+  if (isCopyLoop(parallelOp)) {
     mappingLevel = MapGrid;
     // Collapsing an n-dimensional parallel loop into 1-dimensional parallel
     // loop.
@@ -208,7 +208,8 @@ static void mapParallelOp(ParallelOp parallelOp,
 
 void TestGpuMatmulParallelLoopMapping::runOnFunction() {
   FuncOp funcOp = getFunction();
-  funcOp.getRegion().walk([](ParallelOp parallelOp) { mapParallelOp(parallelOp); });
+  funcOp.getRegion().walk(
+      [](ParallelOp parallelOp) { mapParallelOp(parallelOp); });
 }
 
 namespace mlir {
