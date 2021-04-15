@@ -48,6 +48,11 @@ static llvm::cl::opt<unsigned> clMaxRegPerThread(
     llvm::cl::desc("Max number of registers that a thread may use"),
     llvm::cl::init(24));
 
+static llvm::cl::opt<unsigned> clCuJitOptLevel(
+    "cu-jit-opt-level",
+    llvm::cl::desc("CU JIT optimization level to set"),
+    llvm::cl::init(4));
+
 static llvm::cl::opt<bool>
     clDumpCubin("dump-cubin",
                 llvm::cl::desc("Dump cubin for each gpu.func region"),
@@ -95,15 +100,16 @@ OwnedBlob compilePtxToCubin(const std::string ptx, Location loc,
                                     jitOptionsVals, /* jit option values */
                                     &linkState));
 
-  CUjit_option extraJitOptions[] = {CU_JIT_MAX_REGISTERS};
+  CUjit_option extraJitOptions[] = {CU_JIT_MAX_REGISTERS, CU_JIT_OPTIMIZATION_LEVEL};
   void *extraJitOptionsVals[] = {
-      reinterpret_cast<void *>(clMaxRegPerThread.getValue())};
+      reinterpret_cast<void *>(clMaxRegPerThread.getValue()),
+      reinterpret_cast<void *>(clCuJitOptLevel.getValue())};
 
   RETURN_ON_CUDA_ERROR(
       cuLinkAddData(linkState, CUjitInputType::CU_JIT_INPUT_PTX,
                     const_cast<void *>(static_cast<const void *>(ptx.c_str())),
                     ptx.length(), name.str().data(), /* kernel name */
-                    1,                               /* number of jit options */
+                    2,                               /* number of jit options */
                     extraJitOptions,                 /* jit options */
                     extraJitOptionsVals              /* jit option values */
                     ));
