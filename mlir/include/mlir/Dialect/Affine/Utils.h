@@ -13,8 +13,8 @@
 #ifndef MLIR_DIALECT_AFFINE_UTILS_H
 #define MLIR_DIALECT_AFFINE_UTILS_H
 
-#include "mlir/IR/AffineExpr.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/IR/AffineExpr.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -131,6 +131,7 @@ vectorizeAffineLoopNest(std::vector<SmallVector<AffineForOp, 2>> &loops,
 /// As currently implemented, this transformation cannot fail and will return
 /// early if the op is already in a normalized form.
 void normalizeAffineParallel(AffineParallelOp op);
+void normalizeAffineFor(AffineForOp op);
 
 /// Traverse `e` and return an AffineExpr where all occurrences of `dim` have
 /// been replaced by either:

@@ -1446,6 +1446,24 @@ LogicalResult mlir::loopUnrollByFactor(scf::ForOp forOp,
   return success();
 }
 
+/// Unrolls this loop completely.
+LogicalResult mlir::loopUnrollFull(scf::ForOp forOp) {
+  auto lb = dyn_cast<ConstantIndexOp>(forOp.lowerBound().getDefiningOp());
+  auto ub = dyn_cast<ConstantIndexOp>(forOp.upperBound().getDefiningOp());
+  auto step = dyn_cast<ConstantIndexOp>(forOp.step().getDefiningOp());
+
+  int64_t tripCount;
+  if (lb && ub && step) {
+    int64_t lbVal = lb.getValue();
+    int64_t ubVal = ub.getValue();
+    int64_t stepVal = step.getValue();
+
+    tripCount = mlir::ceilDiv(ubVal - lbVal, stepVal);
+    return loopUnrollByFactor(forOp, tripCount);
+  }
+  return failure();
+}
+
 LogicalResult mlir::loopUnrollJamUpToFactor(AffineForOp forOp,
                                             uint64_t unrollJamFactor) {
   Optional<uint64_t> mayBeConstantTripCount = getConstantTripCount(forOp);
@@ -3894,4 +3912,400 @@ void mlir::collapseAffineParallelOps(FuncOp func) {
       parallelOps[i][0].erase();
     }
   }
+}
+
+void mlir::pipelineLoop(AffineForOp forOp, std::string copyLoopAttrName,
+                        std::string computeLoopAttrName) {
+  FuncOp funcOp = forOp->getParentOfType<FuncOp>();
+  Value loopIV = forOp.getInductionVar();
+  OpBuilder b(funcOp.getContext());
+  // Op exception while replacing uses of old buffers with new buffers.
+  SmallPtrSet<Operation *, 2> exceptions;
+
+  // Find out the copy loops which have loadOps dependant on the loopIV of the
+  // loop to be pipelined.
+  SmallVector<AffineForOp> copyLoops;
+  llvm::SmallDenseSet<Operation *> defOps;
+  forOp.walk([&](AffineForOp nestedForOp) {
+    auto attr = nestedForOp->getAttrOfType<BoolAttr>(copyLoopAttrName);
+    if (attr && attr.getValue() == true) {
+      nestedForOp.walk([&](AffineStoreOp storeOp) {
+        AffineMap storeOpMap = storeOp.getAffineMap();
+        SmallVector<Value> storeOpMapOprs = storeOp.indices();
+        fullyComposeAffineMapAndOperands(&storeOpMap, &storeOpMapOprs);
+        canonicalizeMapAndOperands(&storeOpMap, &storeOpMapOprs);
+        if (llvm::any_of(storeOpMapOprs,
+                         [&](Value mapOpr) { return mapOpr == loopIV; })) {
+          // Atleast one operand of the map is dependant on the loop to be
+          // pipelined.
+          copyLoops.push_back(nestedForOp);
+          defOps.insert(storeOp.memref().getDefiningOp());
+        }
+      });
+    }
+  });
+
+  // For Each unique memref found, create a new memref with same dimension.
+  DenseMap<Operation *, Operation *> newOldMemrefMap;
+  for (auto op : defOps) {
+    // Specializing for global memrefs, other cases(alloc/alloca) can be
+    // handeled by extending when needed.
+    if (auto getGlobalmemrefOp = dyn_cast<GetGlobalMemrefOp>(op)) {
+      std::string memRefName(getGlobalmemrefOp.name());
+      StringRef newMemrefName = memRefName.append("_2");
+
+      // Create a new global memref op.
+      b.setInsertionPoint(funcOp);
+      b.create<GlobalMemrefOp>(
+          funcOp.getLoc(), b.getStringAttr(newMemrefName),
+          b.getStringAttr("public"),
+          TypeAttr::get(getGlobalmemrefOp.getResult().getType()),
+          mlir::Attribute(), mlir::UnitAttr());
+
+      // Create a new getGlobalMemrefOp.
+      b.setInsertionPointAfter(getGlobalmemrefOp);
+      newOldMemrefMap[getGlobalmemrefOp] = b.create<GetGlobalMemrefOp>(
+          getGlobalmemrefOp.getLoc(), getGlobalmemrefOp.getResult().getType(),
+          newMemrefName);
+    }
+  }
+
+  // Strip out one iteration of the copy loops from the loop to be pipelined and
+  // place it outside the loop to be pipelined.
+  b.setInsertionPoint(forOp);
+  SmallVector<Value> lowerBoundOperands(forOp.getLowerBoundOperands());
+  auto lowerBoundMap = forOp.getLowerBoundMap();
+  for (auto copyLoop : copyLoops) {
+    BlockAndValueMapping cloningMap;
+    Value loopLB = b.create<AffineApplyOp>(forOp.getLoc(), lowerBoundMap,
+                                           lowerBoundOperands);
+    cloningMap.map(loopIV, loopLB);
+
+    // Clone the op.
+    AffineForOp clonedForOp =
+        static_cast<AffineForOp>(b.clone(*copyLoop.getOperation(), cloningMap));
+
+    // Add all the ops in the cloned copyLoop to the exception list.
+    clonedForOp.walk([&](Operation *op) { exceptions.insert(op); });
+
+    // Set the lower bound of the stripped loop to the `lowerBound` of the
+    // original loop and upper bound to the `lowerBound + stepSize` of the
+    // original loop.
+    // clonedForOp.walk([&](AffineForOp nestedForOp) {
+    //  SmallVector<Value> lbOperands(nestedForOp.getLowerBoundOperands());
+    //  SmallVector<Value> ubOperands(nestedForOp.getUpperBoundOperands());
+
+    //  if (llvm::any_of(lbOperands,
+    //                   [&](Value mapOpr) { return mapOpr == loopIV; }) ||
+    //      llvm::any_of(ubOperands,
+    //                   [&](Value mapOpr) { return mapOpr == loopIV; })) {
+    //    // The operand which corresponds to the loopIV of the forOp being
+    //    // pipelined is replaced by an affine apply of result which is the
+    //    // result of the lowerBound expression of the forOp, in both the lower
+    //    // and upper bound.
+    //    std::replace(lbOperands.begin(), lbOperands.end(), loopIV, loopLB);
+    //    std::replace(ubOperands.begin(), ubOperands.end(), loopIV, loopLB);
+
+    //    nestedForOp.setLowerBound(lbOperands, nestedForOp.getLowerBoundMap());
+    //    nestedForOp.setUpperBound(ubOperands, nestedForOp.getUpperBoundMap());
+    //  }
+    //});
+  }
+
+  // Get the types of the memref to set as results of the yield op.
+  SmallVector<Type> ifOpResTypes;
+  for (auto op : defOps) {
+    if (auto getGlobalmemrefOp = dyn_cast<GetGlobalMemrefOp>(op))
+      ifOpResTypes.push_back(getGlobalmemrefOp.getResult().getType());
+  }
+
+  // Create affine.if op with appropriate condition to yield memref_1 in even
+  // iteration and memref_2 in odd iteration.
+  b.setInsertionPointToStart(&forOp.getLoopBody().front());
+  uint64_t loopStep = forOp.getStep();
+  AffineExpr memrefSelectExpr = b.getAffineDimExpr(0).floorDiv(loopStep) % 2;
+
+  IntegerSet memrefSelectSet =
+      IntegerSet::get(1, 0, memrefSelectExpr, true /* == 0*/);
+  AffineIfOp copyMemrefSelectIf =
+      b.create<AffineIfOp>(forOp.getLoc(), ifOpResTypes, memrefSelectSet,
+                           loopIV, true /*create else block*/);
+  AffineIfOp computeMemrefSelectIf =
+      b.create<AffineIfOp>(forOp.getLoc(), ifOpResTypes, memrefSelectSet,
+                           loopIV, true /*create else block*/);
+
+  SmallVector<Value> copyToYieldIfThen, copyToYieldElse, computeToYieldIfThen,
+      computeToYieldElse;
+  for (auto op : defOps) {
+    copyToYieldIfThen.push_back(op->getResult(0));
+    copyToYieldElse.push_back(newOldMemrefMap[op]->getResult(0));
+    computeToYieldElse.push_back(op->getResult(0));
+    computeToYieldIfThen.push_back(newOldMemrefMap[op]->getResult(0));
+  }
+
+  // Insert the yield ops as exceptions while replacing the result of
+  // getGlobalmemrefOp with affine.if's
+  b.setInsertionPointToEnd(copyMemrefSelectIf.getThenBlock());
+  exceptions.insert(
+      b.create<AffineYieldOp>(copyMemrefSelectIf.getLoc(), copyToYieldIfThen));
+  b.setInsertionPointToEnd(copyMemrefSelectIf.getElseBlock());
+  exceptions.insert(
+      b.create<AffineYieldOp>(copyMemrefSelectIf.getLoc(), copyToYieldElse));
+  b.setInsertionPointToEnd(computeMemrefSelectIf.getThenBlock());
+  exceptions.insert(b.create<AffineYieldOp>(computeMemrefSelectIf.getLoc(),
+                                            computeToYieldIfThen));
+  b.setInsertionPointToEnd(computeMemrefSelectIf.getElseBlock());
+  exceptions.insert(b.create<AffineYieldOp>(computeMemrefSelectIf.getLoc(),
+                                            computeToYieldElse));
+
+  // funcOp.dump();
+  // Replace the uses of the old memref with the result of the copyIfOp.
+  // for (auto op : defOps) {
+  //  op->getResult(0).replaceAllUsesExcept(
+  //      copyMemrefSelectIf->getOpResult(resCounter), exceptions);
+  //  ++resCounter;
+  //}
+
+  // Replace the uses of the old memref with the result of the computeIfOp.
+  // for (auto op : defOps) {
+  //  op->getResult(0).replaceUsesWithIf(
+  //      computeMemrefSelectIf->getOpResult(resCounter),
+  //      [&](OpOperand &operand) {
+  //        auto ownerOp = operand.getOwner();
+  //        FuncOp parFuncOp = ownerOp->getParentOfType<FuncOp>();
+  //        Operation *curParOp = ownerOp->getParentOfType<AffineForOp>();
+  //        bool hasCopyLoopPar = false;
+  //        while (curParOp != parFuncOp) {
+  //          auto boolAttr =
+  //          curParOp->getAttrOfType<BoolAttr>(copyLoopAttrName); if (boolAttr
+  //          && boolAttr.getValue() == true) {
+  //            hasCopyLoopPar = true;
+  //            break;
+  //          }
+  //          curParOp = curParOp->getParentOfType<AffineForOp>();
+  //        }
+  //        return !hasCopyLoopPar;
+  //      });
+  //}
+  // llvm::outs() << exceptions.size();
+  //
+  // Wrap the copy loops in an affine.if to prevent the copies from happening in
+  // the last iteration to prevent out of bound accesses.
+  SmallVector<Value> upperBoundOperands;
+  AffineMap upperBoundMap = forOp.getUpperBoundMap();
+  SmallVector<AffineExpr> newUpperBoundResExpr;
+
+  // Add the loopIV as a dimension in the upperBound map.
+  for (int64_t i = 0, e = upperBoundMap.getNumDims(); i != e; ++i)
+    upperBoundOperands.push_back(forOp.getUpperBoundOperands()[i]);
+  upperBoundOperands.push_back(loopIV);
+  for (int64_t i = upperBoundMap.getNumDims(),
+               e = upperBoundMap.getNumDims() + upperBoundMap.getNumSymbols();
+       i != e; ++i)
+    upperBoundOperands.push_back(forOp.getUpperBoundOperands()[i]);
+
+  // Convert all the result expressions into (-loopIV) + (ResultExpr -
+  // loopStep).
+  for (auto expr : upperBoundMap.getResults()) {
+    AffineExpr tempExpr = expr;
+    tempExpr = tempExpr - loopStep;
+    // tempExpr =
+    //    (b.getAffineDimExpr(upperBoundOperands.size() - 1) * (-1)) + tempExpr;
+    tempExpr =
+        (b.getAffineDimExpr(upperBoundMap.getNumDims()) * (-1)) + tempExpr;
+    newUpperBoundResExpr.push_back(tempExpr);
+  }
+
+  b.setInsertionPointAfter(copyMemrefSelectIf);
+
+  IntegerSet inBoundCopySet = IntegerSet::get(
+      upperBoundMap.getNumDims() + 1, upperBoundMap.getNumSymbols(),
+      newUpperBoundResExpr, false /* == 0*/);
+
+  AffineIfOp inBoundCopyIf =
+      b.create<AffineIfOp>(copyMemrefSelectIf.getLoc(), inBoundCopySet,
+                           upperBoundOperands, false /*create else block*/);
+
+  // Move the copy loops inside the newlyCreated affine.if op.
+  b.setInsertionPointToStart(inBoundCopyIf.getThenBlock());
+
+  for (auto copyLoop : copyLoops) {
+    b.clone(*copyLoop.getOperation());
+    copyLoop.erase();
+  }
+
+  unsigned resCounter = 0;
+  for (auto op : defOps) {
+    op->getResult(0).replaceUsesWithIf(
+        copyMemrefSelectIf->getOpResult(resCounter), [&](OpOperand &operand) {
+          bool toReplace = false;
+          auto ownerOp = operand.getOwner();
+          auto parOp = ownerOp->getParentOfType<AffineIfOp>();
+          if (parOp) {
+            return parOp == inBoundCopyIf;
+          }
+          return toReplace;
+        });
+    ++resCounter;
+  }
+  // Finally shift the loopIV of the being pipelined inside its body.
+  b.setInsertionPointToStart(&forOp.getLoopBody().front());
+  // SmallVector<AffineExpr> newResExprs;
+  // for (auto expr : lowerBoundMap.getResults()) {
+  //  AffineExpr tempExpr = expr + b.getAffineConstantExpr(loopStep);
+  //  newResExprs.push_back(tempExpr);
+  //}
+  AffineExpr newResExprs =
+      b.getAffineConstantExpr(loopStep) + b.getAffineDimExpr(0);
+
+  AffineMap newLowerBoundMap =
+      AffineMap::get(1, 0, newResExprs, funcOp.getContext());
+
+  // Set the lowerBound operands.
+  lowerBoundOperands.clear();
+  for (int64_t i = 0, e = lowerBoundMap.getNumDims(); i != e; ++i)
+    lowerBoundOperands.push_back(forOp.getLowerBoundOperands()[i]);
+  lowerBoundOperands.push_back(loopIV);
+  for (int64_t i = lowerBoundMap.getNumDims(),
+               e = lowerBoundMap.getNumDims() + lowerBoundMap.getNumSymbols();
+       i != e; ++i)
+    lowerBoundOperands.push_back(forOp.getLowerBoundOperands()[i]);
+
+  Value newLoopLB = b.create<AffineApplyOp>(forOp.getLoc(), newLowerBoundMap,
+                                            lowerBoundOperands);
+  exceptions.insert(newLoopLB.getDefiningOp());
+  loopIV.replaceAllUsesExcept(newLoopLB, exceptions);
+
+  // funcOp.dump();
+  // Replace the uses of the old memref with the result of the copyIfOp.
+  resCounter = 0;
+  for (auto op : defOps) {
+    op->getResult(0).replaceAllUsesExcept(
+        computeMemrefSelectIf->getOpResult(resCounter), exceptions);
+    ++resCounter;
+  }
+}
+
+void mlir::splitLoop(AffineForOp forOp, std::string copyLoopAttrName,
+                     std::string computeLoopAttrName) {
+  FuncOp funcOp = forOp->getParentOfType<FuncOp>();
+  Value loopIV = forOp.getInductionVar();
+  OpBuilder b(funcOp.getContext());
+  // Op exception while replacing uses of old buffers with new buffers.
+  SmallPtrSet<Operation *, 2> exceptions;
+
+  // Find out the copy loops which have loadOps dependant on the loopIV of the
+  // loop to be pipelined.
+  SmallVector<AffineForOp> copyLoops;
+  llvm::SmallDenseSet<Operation *> defOps;
+  forOp.walk([&](AffineForOp nestedForOp) {
+    auto attr = nestedForOp->getAttrOfType<BoolAttr>(copyLoopAttrName);
+    if (attr && attr.getValue() == true) {
+      nestedForOp.walk([&](AffineStoreOp storeOp) {
+        AffineMap storeOpMap = storeOp.getAffineMap();
+        SmallVector<Value> storeOpMapOprs = storeOp.indices();
+        fullyComposeAffineMapAndOperands(&storeOpMap, &storeOpMapOprs);
+        canonicalizeMapAndOperands(&storeOpMap, &storeOpMapOprs);
+        if (llvm::any_of(storeOpMapOprs,
+                         [&](Value mapOpr) { return mapOpr == loopIV; })) {
+          // Atleast one operand of the map is dependant on the loop to be
+          // pipelined.
+          copyLoops.push_back(nestedForOp);
+          defOps.insert(storeOp.memref().getDefiningOp());
+        }
+      });
+    }
+  });
+
+  // Strip out one iteration of the copy loops from the loop to be pipelined and
+  // place it outside the loop to be pipelined.
+  b.setInsertionPoint(forOp);
+  SmallVector<Value> lowerBoundOperands(forOp.getLowerBoundOperands());
+  auto lowerBoundMap = forOp.getLowerBoundMap();
+  for (auto copyLoop : copyLoops) {
+    BlockAndValueMapping cloningMap;
+    Value loopLB = b.create<AffineApplyOp>(forOp.getLoc(), lowerBoundMap,
+                                           lowerBoundOperands);
+    cloningMap.map(loopIV, loopLB);
+
+    // Clone the op.
+    AffineForOp clonedForOp =
+        static_cast<AffineForOp>(b.clone(*copyLoop.getOperation(), cloningMap));
+
+    // Add all the ops in the cloned copyLoop to the exception list.
+    clonedForOp.walk([&](Operation *op) { exceptions.insert(op); });
+  }
+
+  // Finally shift the loopIV of the loop being pipelined inside its body.
+  b.setInsertionPointToStart(&forOp.getLoopBody().front());
+  AffineExpr newResExprs =
+      b.getAffineConstantExpr(forOp.getStep()) + b.getAffineDimExpr(0);
+
+  AffineMap newLowerBoundMap =
+      AffineMap::get(1, 0, newResExprs, funcOp.getContext());
+
+  // Set the lowerBound operands.
+  lowerBoundOperands.clear();
+  for (int64_t i = 0, e = lowerBoundMap.getNumDims(); i != e; ++i)
+    lowerBoundOperands.push_back(forOp.getLowerBoundOperands()[i]);
+
+  lowerBoundOperands.push_back(loopIV);
+
+  for (int64_t i = lowerBoundMap.getNumDims(),
+               e = lowerBoundMap.getNumDims() + lowerBoundMap.getNumSymbols();
+       i != e; ++i)
+    lowerBoundOperands.push_back(forOp.getLowerBoundOperands()[i]);
+
+  Value newLoopLB = b.create<AffineApplyOp>(forOp.getLoc(), newLowerBoundMap,
+                                            lowerBoundOperands);
+  exceptions.insert(newLoopLB.getDefiningOp());
+  loopIV.replaceAllUsesExcept(newLoopLB, exceptions);
+
+  // Decrease one iteration of the loop being split.
+  AffineMap origUpperBoundMap = forOp.getUpperBoundMap();
+  SmallVector<AffineExpr> newUpperBoundResExprs;
+  SmallVector<AffineExpr> origUpperBoundResExprs;
+  for (AffineExpr resExpr : origUpperBoundMap.getResults()) {
+    origUpperBoundResExprs.push_back(resExpr);
+    newUpperBoundResExprs.push_back(resExpr - forOp.getStep());
+  }
+
+  AffineMap newUpperBoundMap = AffineMap::get(
+      origUpperBoundMap.getNumDims(), origUpperBoundMap.getNumSymbols(),
+      newUpperBoundResExprs, funcOp.getContext());
+
+  forOp.setUpperBound(forOp.getUpperBoundOperands(), newUpperBoundMap);
+
+  // Create the for op with extra iteration just after the loop being stripped.
+  // Use a cloningMap replace the arguments of the strippedForOp with the
+  // results of the original forOp.
+  BlockAndValueMapping resCloningMap;
+  resCloningMap.map(forOp.getIterOperands(), forOp->getOpResults());
+  b.setInsertionPointAfter(forOp);
+  AffineForOp strippedForOp =
+      static_cast<AffineForOp>(b.clone(*forOp.getOperation(), resCloningMap));
+
+  // Set the lowerBound of strippedForOp to the newUpperBound of the original
+  // forOp. Set upperBound to the original upperBound of the original loop.
+  strippedForOp.setLowerBound(strippedForOp.getUpperBoundOperands(),
+                              newUpperBoundMap);
+  strippedForOp.setUpperBound(strippedForOp.getUpperBoundOperands(),
+                              origUpperBoundMap);
+
+  // Replace the results of the originalForOp with the results of the
+  // strippedForOp. Results passed as iter_args to the strippedForOp are an
+  // exception.
+  exceptions.clear();
+  exceptions.insert(strippedForOp.getOperation());
+  for (auto res : llvm::zip(forOp.getResults(), strippedForOp.getResults())) {
+    std::get<0>(res).replaceAllUsesExcept(std::get<1>(res), exceptions);
+  }
+
+  // Remove the copy loops from the strippedForOp.
+  strippedForOp.walk([&](AffineForOp copyLoop) {
+    BoolAttr isCopyLoop = copyLoop->getAttrOfType<BoolAttr>(copyLoopAttrName);
+    if (isCopyLoop && isCopyLoop.getValue() == true) {
+      copyLoop.erase();
+    }
+  });
 }

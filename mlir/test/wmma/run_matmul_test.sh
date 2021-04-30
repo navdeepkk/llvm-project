@@ -3,18 +3,20 @@
 # Usage: ./run_matmul_test.sh --problem_size_m 1024 --problem_size_n 1024 --problem_size_k 1024 --thread_block_tile_m 64 --thread_block_tile_n 64 --thread_block_tile_k 16 --warp_tile_m 32 --warp_tile_n 32 --warp_tile_k 16 --padding_a 8 --padding_b 8 --verify 1
 
 # Define the default parameters.
-problem_size_m=${problem_size_m:-4096}
-problem_size_n=${problem_size_n:-4096}
-problem_size_k=${problem_size_k:-4096}
+problem_size_m=${problem_size_m:-8192}
+problem_size_n=${problem_size_n:-8192}
+problem_size_k=${problem_size_k:-8192}
 thread_block_tile_m=${thread_block_tile_m:-128}
 thread_block_tile_n=${thread_block_tile_n:-128}
-thread_block_tile_k=${thread_block_tile_k:-16}
-warp_tile_m=${warp_tile_m:-64}
+thread_block_tile_k=${thread_block_tile_k:-32}
+warp_tile_m=${warp_tile_m:-32}
 warp_tile_n=${warp_tile_n:-64}
 warp_tile_k=${warp_tile_k:-16}
 padding_a=${padding_a:-8}
 padding_b=${padding_b:-8}
 load_store_width=${load_store_width:-128}
+reg_per_thread=${reg_per_thread:-255}
+jit_opt_level=${jit_opt_level:-4}
 print_output=${print_output:-0}
 verify=${verify:-0}
 
@@ -29,6 +31,10 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+#if [[ $thread_block_tile_k -eq 16 ]]; then
+#  exit
+#fi
+#
 # Set print_output if verfiy is enabled.
 if [[ $verify -eq 1 ]]
 then
@@ -50,21 +56,30 @@ $MLIR_OPT matmul_opt_base.mlir \
   --canonicalize \
   -test-gpu-matmul-fast-buffer-placement="matrices=A,B global-allocation=true" \
   --canonicalize \
-  --test-specialize-affine-matmul-for-wmma="accum=f32 load-store-width=$load_store_width padding-a=$padding_a padding-b=$padding_b" \
-  --canonicalize \
-  --test-collapse-affine-parallel \
-  --canonicalize \
-  --lower-affine \
-  --test-gpu-matmul-parallel-loop-mapping \
-  --canonicalize \
-  --test-convert-matmul-parallel-loops-to-gpu \
-  --gpu-kernel-outlining \
-  --test-gpu-mark-global-as-workgroup-memory \
-  --canonicalize \
-  --cse > matmul_opt_inter.mlir
-  $MLIR_OPT matmul_opt_inter.mlir --convert-scf-to-std > matmul_opt_final.mlir
+  --test-mark-parallel-loops > tiled.mlir 
+  $MLIR_OPT tiled.mlir --test-specialize-affine-matmul-for-wmma="accum=f32 padding-a=$padding_a padding-b=$padding_b" \
+  --canonicalize --cse > specialized.mlir
+  $MLIR_OPT specialized.mlir --test-pipeline-pointwise-copy \
+  --canonicalize --test-gpu-matmul-barrier-insertion > pipelined.mlir 
+  $MLIR_OPT pipelined.mlir --test-vectorize-gpu-matmul-copy-loops="load-store-width=$load_store_width" \
+  --canonicalize > vectorized.mlir
+  #$MLIR_OPT vectorized.mlir --test-unroll-specific-loops > unrolled.mlir
+  $MLIR_OPT vectorized.mlir --test-collapse-affine-parallel > parallel.mlir 
+  $MLIR_OPT parallel.mlir --canonicalize \
+  --lower-affine > scf.mlir 
+  $MLIR_OPT scf.mlir --test-gpu-matmul-parallel-loop-mapping > mapped.mlir
+  $MLIR_OPT mapped.mlir --canonicalize \
+  --test-convert-matmul-parallel-loops-to-gpu --cse > matmul_inter.mlir
+  #--test-convert-matmul-parallel-loops-to-gpu --test-unroll-scf-specific-loops --cse > matmul_inter.mlir
+  $MLIR_OPT matmul_inter.mlir --canonicalize \
+  -gpu-kernel-outlining \
+  --test-gpu-mark-global-as-workgroup-memory > outlined.mlir
+  $MLIR_OPT outlined.mlir --canonicalize \
+  --cse \
+  --convert-scf-to-std > matmul_opt_final.mlir
 
-$MLIR_CUDA_RUNNER matmul_opt_final.mlir -O3 --max-reg-per-thread=255 --sm=sm_75 --index-bitwidth=32 -gpu-to-cubin="gpu-binary-annotation=nvvm.cubin" -gpu-to-llvm="gpu-binary-annotation=nvvm.cubin" $MLIR_RUNTIME_LIBS --entry-point-result=void > full_pipe.out
+#$MLIR_CUDA_RUNNER matmul_opt_final.mlir -O3 --jit-opt-level=$jit_opt_level --print-ir-after-all --max-reg-per-thread=$reg_per_thread --sm=sm_75 --index-bitwidth=32 -gpu-to-cubin="gpu-binary-annotation=nvvm.cubin" -gpu-to-llvm="gpu-binary-annotation=nvvm.cubin" $MLIR_RUNTIME_LIBS --entry-point-result=void > full_pipe.out
+$MLIR_CUDA_RUNNER matmul_opt_final.mlir -O3 --jit-opt-level=$jit_opt_level --max-reg-per-thread=$reg_per_thread --sm=sm_75 --index-bitwidth=32 -gpu-to-cubin="gpu-binary-annotation=nvvm.cubin" -gpu-to-llvm="gpu-binary-annotation=nvvm.cubin" $MLIR_RUNTIME_LIBS --entry-point-result=void > full_pipe.out
 
 # Run the naive version for verification.
 if [[ $verify -eq 1 ]]

@@ -11,9 +11,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Analysis/Utils.h"
 #include "mlir/Analysis/AffineAnalysis.h"
 #include "mlir/Analysis/PresburgerSet.h"
+#include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/IR/AffineValueMap.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
@@ -1184,8 +1184,7 @@ bool mlir::isLoopParallel(AffineForOp forOp) {
   auto walkResult = forOp.walk([&](Operation *opInst) -> WalkResult {
     if (isa<AffineReadOpInterface, AffineWriteOpInterface>(opInst))
       loadAndStoreOpInsts.push_back(opInst);
-    else if (!isa<AffineForOp, AffineYieldOp, AffineIfOp, AllocOp>(
-                 opInst) &&
+    else if (!isa<AffineForOp, AffineYieldOp, AffineIfOp, AllocOp>(opInst) &&
              !MemoryEffectOpInterface::hasNoEffect(opInst))
       return WalkResult::interrupt();
 
@@ -1237,6 +1236,8 @@ bool mlir::isLoopParallel(AffineForOp forOp) {
 
         if (defOpDepth <= depDepth)
           return false;
+        else
+          return true;
       }
     }
   }

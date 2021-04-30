@@ -24,6 +24,7 @@ add_mlir_conversion_library(MLIRGPUToGPURuntimeTransforms
   intrinsics_gen
 
   LINK_COMPONENTS
+  Target
   Core
   MC
   ${AMDGPU_LIBS}
@@ -38,3 +39,5 @@ add_mlir_conversion_library(MLIRGPUToGPURuntimeTransforms
   MLIRSupport
   MLIRStandardToLLVM
 )
+
+add_dependencies(MLIRGPUToGPURuntimeTransforms LLVMTarget)

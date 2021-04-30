@@ -119,6 +119,7 @@ if(MLIR_CUDA_RUNNER_ENABLED)
 
   # We need the libcuda.so library.
   find_library(CUDA_RUNTIME_LIBRARY cuda)
+  find_library(CUBLAS_RUNTIME_LIBRARY cublas)
 
   add_mlir_library(mlir_cuda_runtime
     SHARED
@@ -134,5 +135,6 @@ if(MLIR_CUDA_RUNNER_ENABLED)
   target_link_libraries(mlir_cuda_runtime
     PRIVATE
     ${CUDA_RUNTIME_LIBRARY}
+    ${CUBLAS_RUNTIME_LIBRARY}
   )
 endif()

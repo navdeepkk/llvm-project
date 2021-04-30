@@ -46,12 +46,17 @@ using namespace mlir;
 static llvm::cl::opt<unsigned> clMaxRegPerThread(
     "max-reg-per-thread",
     llvm::cl::desc("Max number of registers that a thread may use"),
-    llvm::cl::init(24));
+    llvm::cl::init(255));
 
-static llvm::cl::opt<unsigned> clCuJitOptLevel(
-    "cu-jit-opt-level",
-    llvm::cl::desc("CU JIT optimization level to set"),
+static llvm::cl::opt<unsigned> clJIToptLevel(
+    "jit-opt-level",
+    llvm::cl::desc("Opt level to be supplied to the blob converter"),
     llvm::cl::init(4));
+
+static llvm::cl::opt<unsigned>
+    clCuJitOptLevel("cu-jit-opt-level",
+                    llvm::cl::desc("CU JIT optimization level to set"),
+                    llvm::cl::init(4));
 
 static llvm::cl::opt<bool>
     clDumpCubin("dump-cubin",
@@ -91,16 +96,18 @@ OwnedBlob compilePtxToCubin(const std::string ptx, Location loc,
   CUlinkState linkState;
 
   CUjit_option jitOptions[] = {CU_JIT_ERROR_LOG_BUFFER,
-                               CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES};
+                               CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES,
+                               CU_JIT_CACHE_MODE};
   void *jitOptionsVals[] = {jitErrorBuffer,
-                            reinterpret_cast<void *>(sizeof(jitErrorBuffer))};
+                            reinterpret_cast<void *>(sizeof(jitErrorBuffer)),
+                            reinterpret_cast<void *>(CU_JIT_CACHE_OPTION_CG)};
 
-  RETURN_ON_CUDA_ERROR(cuLinkCreate(2,              /* number of jit options */
+  RETURN_ON_CUDA_ERROR(cuLinkCreate(3,              /* number of jit options */
                                     jitOptions,     /* jit options */
                                     jitOptionsVals, /* jit option values */
                                     &linkState));
-
-  CUjit_option extraJitOptions[] = {CU_JIT_MAX_REGISTERS, CU_JIT_OPTIMIZATION_LEVEL};
+  CUjit_option extraJitOptions[] = {CU_JIT_MAX_REGISTERS,
+                                    CU_JIT_OPTIMIZATION_LEVEL};
   void *extraJitOptionsVals[] = {
       reinterpret_cast<void *>(clMaxRegPerThread.getValue()),
       reinterpret_cast<void *>(clCuJitOptLevel.getValue())};

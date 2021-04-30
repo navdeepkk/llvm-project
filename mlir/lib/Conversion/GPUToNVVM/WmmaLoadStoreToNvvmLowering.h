@@ -33,6 +33,46 @@ static LogicalResult areAllLLVMTypes(Operation *op, ValueRange operands,
   return success();
 }
 
+template <typename T>
+static void linearizeIndices(T &loadStoreOp, MemRefType memRefType,
+                             ConversionPatternRewriter &rewriter, Type opType,
+                             Value &res) {
+  Location loc = loadStoreOp.getLoc();
+  SmallVector<Value> numElems;
+
+  // Create a constant 1.
+  numElems.push_back(rewriter.create<LLVM::ConstantOp>(
+      loc, opType, rewriter.getI32IntegerAttr(1)));
+
+  // Accumulate the dim count.
+  for (int64_t dimInx = memRefType.getShape().size() - 1, e = 0; dimInx > e;
+       dimInx--) {
+    Value dim = (rewriter.create<LLVM::ConstantOp>(
+        loc, opType,
+        rewriter.getI32IntegerAttr(memRefType.getDimSize(dimInx))));
+    numElems.push_back(
+        rewriter.create<LLVM::MulOp>(loc, opType, dim, numElems.back()));
+  }
+
+  // Reverse the list for easy manipulation.
+  std::reverse(numElems.begin(), numElems.end());
+
+  // Create a linear index by multiplying the dim count with the respective
+  // index.
+  SmallVector<Value> linearIdx;
+  linearIdx.push_back(rewriter.create<LLVM::MulOp>(
+      loc, opType, loadStoreOp.indices()[0], numElems[0]));
+
+  for (uint64_t i = 1; i < loadStoreOp.indices().size(); ++i) {
+    Value prod = rewriter.create<LLVM::MulOp>(
+        loc, opType, loadStoreOp.indices()[i], numElems[i]);
+    linearIdx.push_back(
+        rewriter.create<LLVM::AddOp>(loc, opType, linearIdx[i - 1], prod));
+  }
+
+  res = linearIdx.back();
+}
+
 /// This class implemtents the conversion of GPU MMA loadOp to wmma.load op
 /// in the NVVM dialect. The conversion not only emits the NVVM op but also
 /// emits code that is necessary to store the data in the destination memref
@@ -61,14 +101,13 @@ public:
     // must also follow this restriction.
     if (indexTypeBitwidth != 32)
       return rewriter.notifyMatchFailure(
-          op, "Expected indices to the meref to be 32-bit wide.");
+          op, "Expected indices to the memref to be 32-bit wide.");
 
     // Source memref of the original op.
     MemRefType srcMemrefType =
         subgroupMmaLoadMatrixOp.srcMemref().getType().cast<MemRefType>();
     Location loc = op->getLoc();
 
-    auto beginInx = subgroupMmaLoadMatrixOp.indices().getBeginOperandIndex();
     auto leadDimension = subgroupMmaLoadMatrixOp.leadDimensionAttr();
     auto operand = subgroupMmaLoadMatrixOp.operandAttr();
 
@@ -80,17 +119,20 @@ public:
     // `srcOffsetJ`. The actualOffset is (memrefOffset + (alignedPtr +
     // ((leadDimension * srcOffsetI) + srcOffsetJ)). The memrefs here are
     // assumed to be normalized and hence the simple conversion works.
-    Value srcOffsetIVal = subgroupMmaLoadMatrixOp->getOpOperand(beginInx).get();
-    Value srcOffsetJVal =
-        subgroupMmaLoadMatrixOp->getOpOperand(beginInx + 1).get();
+    Value loadOffset;
+    linearizeIndices(subgroupMmaLoadMatrixOp, srcMemrefType, rewriter,
+                     llvmTypes.int32Type, loadOffset);
+    // Value srcOffsetIVal =
+    // subgroupMmaLoadMatrixOp->getOpOperand(beginInx).get(); Value
+    // srcOffsetJVal
+    // =
+    //    subgroupMmaLoadMatrixOp->getOpOperand(beginInx + 1).get();
     Value leadingDim32 = rewriter.create<LLVM::ConstantOp>(
         loc, llvmTypes.int32Type, leadDimension);
-    Value numElemsLeadDim = rewriter.create<LLVM::MulOp>(
-        loc, llvmTypes.int32Type, leadingDim32, srcOffsetIVal);
-    Value loadOffset = rewriter.create<LLVM::AddOp>(
-        loc, llvmTypes.int32Type, numElemsLeadDim, srcOffsetJVal);
-    // Cast offset I64 to make the calculation below independent of index
-    // bitwidth supplied.
+    // Value numElemsLeadDim = rewriter.create<LLVM::MulOp>(
+    //    loc, llvmTypes.int32Type, leadingDim32, srcOffsetIVal);
+    // Value loadOffset = rewriter.create<LLVM::AddOp>(
+    //    loc, llvmTypes.int32Type, numElemsLeadDim, srcOffsetJVal);
     Value promotedSrcOpToUse;
 
     promotedSrcOpToUse = promotedSrcOp[2];
@@ -169,7 +211,6 @@ public:
       : ConvertOpToLLVMPattern<gpu::SubgroupMmaStoreMatrixOp>(typeConverter),
         llvmTypes(context) {}
 
-
   LogicalResult
   matchAndRewrite(gpu::SubgroupMmaStoreMatrixOp subgroupMmaStoreMatrixOp,
                   ArrayRef<Value> operands,
@@ -196,20 +237,20 @@ public:
         loc, op->getOperand(1), operands[1], rewriter);
 
     auto leadDimension = subgroupMmaStoreMatrixOp.leadDimensionAttr();
-    unsigned beginInx =
-        subgroupMmaStoreMatrixOp.indices().getBeginOperandIndex();
-
+    Value loadOffset;
+    linearizeIndices(subgroupMmaStoreMatrixOp, dstMemrefType, rewriter,
+                     llvmTypes.int32Type, loadOffset);
     // Emit ops which compute the store offset using `dstOffsetI`,
     // `dstOffsetJ`. The actualOffset is (memrefOffset + (alignedPtr +
     // ((leadDimension * dstOffsetI) + dstOffsetJ)).
-    Value dstOffsetIVal = subgroupMmaStoreMatrixOp.getOperand(beginInx);
-    Value dstOffsetJVal = subgroupMmaStoreMatrixOp.getOperand(beginInx + 1);
+    // Value dstOffsetIVal = subgroupMmaStoreMatrixOp.getOperand(beginInx);
+    // Value dstOffsetJVal = subgroupMmaStoreMatrixOp.getOperand(beginInx + 1);
     Value leadingDim32 = rewriter.create<LLVM::ConstantOp>(
         loc, llvmTypes.int32Type, leadDimension);
-    Value numElemsLeadDim = rewriter.create<LLVM::MulOp>(
-        loc, llvmTypes.int32Type, leadingDim32, dstOffsetIVal);
-    Value loadOffset = rewriter.create<LLVM::AddOp>(
-        loc, llvmTypes.int32Type, numElemsLeadDim, dstOffsetJVal);
+    // Value numElemsLeadDim = rewriter.create<LLVM::MulOp>(
+    //    loc, llvmTypes.int32Type, leadingDim32, dstOffsetIVal);
+    // Value loadOffset = rewriter.create<LLVM::AddOp>(
+    //    loc, llvmTypes.int32Type, numElemsLeadDim, dstOffsetJVal);
     // Cast offset I64 to make the calculation below independent of index
     // bitwidth supplied.
     Value promotedDstOpToUse;
@@ -242,7 +283,7 @@ public:
       for (unsigned i = 0, e = llvmTypes.numHalfsInOpFrags[llvmTypes.D]; i < e;
            ++i) {
         Value toUse = rewriter.create<LLVM::ExtractValueOp>(
-            loc, llvmTypes.f16x2Ty, operands[0], rewriter.getI64ArrayAttr(i));
+            loc, llvmTypes.f16x2Ty, operands[0], rewriter.getI32ArrayAttr(i));
         storeOpOperands.push_back(toUse);
       }
       storeOpOperands.push_back(leadingDim32);
@@ -259,7 +300,7 @@ public:
             .getElementType() == llvmTypes.f32Ty) {
       for (unsigned i = 0, e = 8; i < e; ++i) {
         Value toUse = rewriter.create<LLVM::ExtractValueOp>(
-            loc, llvmTypes.f32Ty, operands[0], rewriter.getI64ArrayAttr(i));
+            loc, llvmTypes.f32Ty, operands[0], rewriter.getI32ArrayAttr(i));
         storeOpOperands.push_back(toUse);
       }
       storeOpOperands.push_back(leadingDim32);

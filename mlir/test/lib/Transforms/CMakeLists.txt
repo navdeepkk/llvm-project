@@ -14,10 +14,12 @@ add_mlir_library(MLIRTestTransforms
   TestDynamicPipeline.cpp
   TestLoopFusion.cpp
   TestGpuMarkGlobalAsWorkgroupMemory.cpp
+  TestGpuMatmulDistributeWarpsAmongLoops.cpp
   TestGpuMatmulFastBufferPlacement.cpp
   TestGpuMemoryPromotion.cpp
   TestGpuParallelLoopMapping.cpp
   TestGpuRewrite.cpp
+  TestGPUMatmulBarrierInsertion.cpp
   TestGpuMatmulParallelLoopMapping.cpp
   TestCollapseAffineParallel.cpp
   TestInlining.cpp
@@ -29,9 +31,16 @@ add_mlir_library(MLIRTestTransforms
   TestLoopMapping.cpp
   TestLoopParametricTiling.cpp
   TestLoopUnrolling.cpp
+  TestLoopUnroll.cpp
+  TestSCFLoopUnroll.cpp
+  TestUnrollAndDelayCopies.cpp
+  TestMarkParallelLoops.cpp
   TestNumberOfExecutions.cpp
   TestOpaqueLoc.cpp
+  TestPipelinePointwiseCopy.cpp
+  TestVectorizeGPUMatmulCopyLoops.cpp
   TestPolynomialApproximation.cpp
+  TestCopyLoopNormalization.cpp
   TestMemRefBoundCheck.cpp
   TestMemRefDependenceCheck.cpp
   TestMemRefStrideCalculation.cpp
@@ -50,6 +59,7 @@ add_mlir_library(MLIRTestTransforms
 
   LINK_LIBS PUBLIC
   MLIRAffine
+  MLIRAffineTransforms
   MLIRAnalysis
   MLIREDSC
   MLIRGPU

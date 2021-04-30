@@ -28,6 +28,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/TargetRegistry.h"
@@ -134,11 +135,15 @@ OwnedBlob GpuKernelToBlobPass::convertModuleToBlob(llvm::Module &llvmModule,
       emitError(loc, "cannot initialize target machine");
       return {};
     }
+
+    targetMachine->setOptLevel(llvm::CodeGenOpt::Aggressive);
   }
 
   llvmModule.setDataLayout(targetMachine->createDataLayout());
 
   auto targetISA = translateModuleToISA(llvmModule, *targetMachine);
+
+  // llvm::outs() << targetISA << "\n";
 
   return blobGenerator(targetISA, loc, name);
 }

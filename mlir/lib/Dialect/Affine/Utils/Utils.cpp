@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IntegerSet.h"
@@ -250,6 +250,11 @@ void mlir::affineParallelize(AffineForOp forOp) {
       upperBoundMap, upperBoundOperands, forOp.getStep());
   // Steal the body of the old affine for op and erase it.
   newPloop.region().takeBody(forOp.region());
+  // Preserve attribute if present.
+  SmallVector<NamedAttribute> pLoopAttrs(forOp->getAttrs().begin(),
+                                         forOp->getAttrs().end());
+  pLoopAttrs.append(newPloop->getAttrs().begin(), newPloop->getAttrs().end());
+  newPloop->setAttrs(pLoopAttrs);
   forOp.erase();
 }
 

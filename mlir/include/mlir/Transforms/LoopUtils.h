@@ -39,6 +39,7 @@ class ParallelOp;
 /// Unrolls this for operation completely if the trip count is known to be
 /// constant. Returns failure otherwise.
 LogicalResult loopUnrollFull(AffineForOp forOp);
+LogicalResult loopUnrollFull(scf::ForOp forOp);
 
 /// Unrolls this for operation by the specified unroll factor. Returns failure
 /// if the loop cannot be unrolled either due to restrictions or due to invalid
@@ -335,6 +336,32 @@ LogicalResult moveLoopInvariantCode(LoopLikeOpInterface looplike);
 /// Collapses perfectly nested multi-dimensional 'affine.parallel' ops contained
 /// in `func` into a single n-dimensional 'affine.parallel' op.
 void collapseAffineParallelOps(FuncOp func);
+
+/// Performs the pipelining of pointwise copy loops using double buffering i.e.
+/// in each iteration the data is copied to one memory location and for
+/// computation the data is loaded from alternate memory location. In this way
+/// data copy and computation both happens in parallel.
+///
+/// `copyLoopAttrName` attribute is used to identify that the given loop nest
+/// is a copy loop nest which copies data from global memory to shared memory
+/// and pipelining is done in such a way that one round of execution of this
+/// loop nest is done in advance so that during computation, the computation
+/// loop nest will use the data copied in previous iteration of copy loop nest,
+/// meanwhile the copy loop nest will copy data for next iteration of compute
+/// loop nest.
+///
+/// `computeLoopAttrName` attribute is used to identify that the given loop nest
+/// is a computation loop nest which performs computation and pipelining is done
+/// in such a way that this loop nest starts execution after one iteration of
+/// copy loop nest is executed.
+void pipelinePointwiseCopy(FuncOp func, std::string copyLoopAttrName,
+                           std::string computeLoopAttrName);
+
+void pipelineLoop(AffineForOp forOp, std::string copyLoopAttrName,
+                  std::string computeLoopAttrName);
+
+void splitLoop(AffineForOp forOp, std::string copyLoopAttrName,
+               std::string computeLoopAttrName);
 
 } // end namespace mlir
 

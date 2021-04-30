@@ -1,5 +1,4 @@
 //===------ TestConvertMatmulParallelLoopsToGPU.cpp ----------------------===//
-//--------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -165,9 +164,36 @@ static LogicalResult convertIfOp(gpu::LaunchOp launchOp, IfOp ifOp,
   bool hasElseRegion = ifOp.elseRegion().empty() ? false : true;
 
   Location loc = ifOp.getLoc();
-  auto clonedIfOp = rewriter.create<scf::IfOp>(
-      loc, cloningMap.lookupOrDefault(ifOp.condition()), hasElseRegion);
+  scf::IfOp clonedIfOp;
 
+  if (ifOp.getNumResults() > 0) {
+    auto yieldOpBuilder = [&](OpBuilder &builder, Location loc) {
+      builder.create<scf::YieldOp>(loc);
+    };
+    clonedIfOp =
+        rewriter.create<scf::IfOp>(loc, ifOp.getResultTypes(),
+                                   cloningMap.lookupOrDefault(ifOp.condition()),
+                                   yieldOpBuilder, yieldOpBuilder);
+    auto &ifThenYield = ifOp.thenRegion().front().back();
+    auto &ifElseYield = ifOp.elseRegion().front().back();
+    auto thenYieldOperands = ifThenYield.getOperands();
+    auto elseYieldOperands = ifElseYield.getOperands();
+
+    SmallVector<Value, 4> loopOpYieldOper;
+    for (auto oper : thenYieldOperands)
+      loopOpYieldOper.push_back(cloningMap.lookupOrDefault(oper));
+    clonedIfOp.thenRegion().front().back().setOperands(loopOpYieldOper);
+
+    loopOpYieldOper.clear();
+    for (auto oper : elseYieldOperands)
+      loopOpYieldOper.push_back(cloningMap.lookupOrDefault(oper));
+    clonedIfOp.elseRegion().front().back().setOperands(loopOpYieldOper);
+
+    cloningMap.map(ifOp.getResults(), clonedIfOp.getResults());
+  } else {
+    clonedIfOp = rewriter.create<scf::IfOp>(
+        loc, cloningMap.lookupOrDefault(ifOp.condition()), hasElseRegion);
+  }
   // First insert the sentinel values which marks the end of the `ifOp` scope.
   worklist.push_back(launchOp.getOperation());
 
@@ -175,11 +201,15 @@ static LogicalResult convertIfOp(gpu::LaunchOp launchOp, IfOp ifOp,
   if (hasElseRegion) {
     Block *body = &ifOp.elseRegion().front();
     worklist.reserve(worklist.size() + body->getOperations().size());
+
+    if (ifOp.getNumResults() > 0)
+      worklist.push_back(&clonedIfOp.thenRegion().front().back());
+
     for (Operation &op : llvm::reverse(body->without_terminator())) {
       worklist.push_back(&op);
     }
-    // The sentinal for the end of else region is inserted now. The newly
-    // created IfOp is used as the sentinal value.
+    // The sentinel for the end of else region is inserted now. The newly
+    // created IfOp is used as the sentinel value.
     worklist.push_back(clonedIfOp.getOperation());
   }
 
@@ -187,9 +217,14 @@ static LogicalResult convertIfOp(gpu::LaunchOp launchOp, IfOp ifOp,
   rewriter.setInsertionPointToStart(&clonedIfOp.thenRegion().front());
   Block *body = &ifOp.thenRegion().front();
   worklist.reserve(worklist.size() + body->getOperations().size());
+
+  if (ifOp.getNumResults() > 0)
+    worklist.push_back(&clonedIfOp.thenRegion().front().back());
+
   for (Operation &op : llvm::reverse(body->without_terminator())) {
     worklist.push_back(&op);
   }
+
   return success();
 }
 
@@ -260,20 +295,30 @@ static LogicalResult convertParallelLoop(gpu::LaunchOp launchOp,
     // global memory coallescing.
     // TODO: Enable further optimizations such as prevention of shared memory
     // bank conflicts while loading the operands.
+
+    // Single iteration for.
     for (auto loop : llvm::zip(parallelOp.getInductionVars(),
                                parallelOp.upperBound(), parallelOp.step())) {
       Value iv, upperBound, step;
       std::tie(iv, upperBound, step) = loop;
 
-      auto loopOp = rewriter.create<scf::ForOp>(
-          loc, linearTidXYZ, cloningMap.lookupOrDefault(upperBound),
-          numThreadsXYZ);
+      Value numElemsToCopyPerThread = rewriter.create<SignedDivIOp>(
+          loc, cloningMap.lookupOrDefault(upperBound),
+          cloningMap.lookupOrDefault(numThreadsXYZ));
 
-      Value newIndex = loopOp.getInductionVar();
+      auto loopOp = rewriter.create<scf::ForOp>(
+          loc, rewriter.create<ConstantIndexOp>(loc, 0),
+          numElemsToCopyPerThread, rewriter.create<ConstantIndexOp>(loc, 1));
+
       rewriter.setInsertionPointToStart(loopOp.getBody());
+      Value ivNumThreads =
+          rewriter.create<MulIOp>(loc, loopOp.getInductionVar(), numThreadsXYZ);
+      Value newIndex = rewriter.create<AddIOp>(loc, linearTidXYZ, ivNumThreads);
+      loopOp->setAttr("isCopyLoopNest",
+                      BoolAttr::get(loopOp.getContext(), true));
       // Put a sentinel into the worklist so we know when to pop out of the
-      // loop body again. We use the launchOp here, as that cannot be part of
-      // the bodies instruction.
+      // loop body again. We use the launchOp here, as that cannot be part
+      // of the bodies instruction.
       worklist.push_back(launchOp.getOperation());
       cloningMap.map(iv, newIndex);
     }
@@ -484,7 +529,7 @@ LoopsToGpuLowering::matchAndRewrite(ParallelOp parallelOp,
         return failure();
     } else if (auto nestedIf = dyn_cast<IfOp>(op)) {
       if (nestedIf->getParentOfType<gpu::LaunchOp>() == launchOp) {
-        // This is a sentinal op. Set the rewriter to the then part of the if
+        // This is a sentinel op. Set the rewriter to the then part of the if
         // op.
         if (IfOp parent =
                 dyn_cast<IfOp>(rewriter.getInsertionPoint()->getParentOp()))
