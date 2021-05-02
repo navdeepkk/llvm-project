@@ -28,6 +28,8 @@
 #include "../GPUCommon/IndexIntrinsicsOpLowering.h"
 #include "../GPUCommon/OpToFuncCallLowering.h"
 #include "../PassDetail.h"
+#include "WmmaLoadStoreToNvvmLowering.h"
+#include "WmmaMmaOptoNvvmLowering.h"
 
 using namespace mlir;
 
@@ -127,6 +129,37 @@ struct LowerGpuOpsToNVVMOpsPass
       return converter.convertType(MemRefType::Builder(type).setMemorySpace(0));
     });
 
+    // Lowering for MMAMatrixType.
+    converter.addConversion([&](gpu::MMAMatrixType type) -> Type {
+      // The number of items in structToReturn are dependent on the the dataType
+      // and the MMA operand that this operation is associated with.
+      llvm::DenseMap<StringRef, int64_t> numElemsPerThreadF16,
+          numElemsPerThreadF32;
+      numElemsPerThreadF16["AOp"] = 8;
+      numElemsPerThreadF16["BOp"] = 8;
+      numElemsPerThreadF16["COp"] = 4;
+      numElemsPerThreadF16["DOp"] = 4;
+      numElemsPerThreadF32["AOp"] = 8;
+      numElemsPerThreadF32["BOp"] = 8;
+      numElemsPerThreadF32["COp"] = 8;
+      numElemsPerThreadF32["DOp"] = 8;
+      Type structToReturn;
+      if (type.getElementType().isF16()) {
+        unsigned vecSize = 2 /*number of f16's in 32-bit*/;
+        Type vec = VectorType::get(vecSize, FloatType::getF16(&getContext()));
+        unsigned size = numElemsPerThreadF16[type.getOperand()];
+        SmallVector<Type> elements(size, vec);
+        structToReturn =
+            LLVM::LLVMStructType::getLiteral(&getContext(), elements);
+      } else if (type.getElementType().isF32()) {
+        unsigned size = numElemsPerThreadF32[type.getOperand()];
+        SmallVector<Type> elements(size, FloatType::getF32(&getContext()));
+        structToReturn =
+            LLVM::LLVMStructType::getLiteral(&getContext(), elements);
+      }
+      return structToReturn;
+    });
+
     RewritePatternSet patterns(m.getContext());
     RewritePatternSet llvmPatterns(m.getContext());
 
@@ -182,6 +215,9 @@ void mlir::populateGpuToNVVMConversionPatterns(LLVMTypeConverter &converter,
       Identifier::get(NVVM::NVVMDialect::getKernelFuncAttrName(),
                       &converter.getContext()));
 
+  patterns.insert<WmmaLoadOpToNVVMLowering>(converter);
+  patterns.insert<WmmaMmaOpToNVVMLowering>(converter);
+  patterns.insert<WmmaStoreOpToNVVMLowering>(converter);
   patterns.add<OpToFuncCallLowering<AbsFOp>>(converter, "__nv_fabsf",
                                              "__nv_fabs");
   patterns.add<OpToFuncCallLowering<math::AtanOp>>(converter, "__nv_atanf",
