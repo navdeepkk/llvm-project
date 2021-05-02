@@ -11,9 +11,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 
 #include "llvm/IR/IRBuilder.h"
@@ -22,6 +22,7 @@
 using namespace mlir;
 using namespace mlir::LLVM;
 using mlir::LLVM::detail::createIntrinsicCall;
+using mlir::LLVM::detail::createNvvmIntrinsicCall;
 
 static llvm::Intrinsic::ID getShflBflyIntrinsicId(llvm::Type *resultType,
                                                   bool withPredicate) {
