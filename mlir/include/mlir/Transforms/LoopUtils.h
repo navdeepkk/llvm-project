@@ -39,13 +39,15 @@ class ParallelOp;
 /// Unrolls this for operation completely if the trip count is known to be
 /// constant. Returns failure otherwise.
 LogicalResult loopUnrollFull(AffineForOp forOp);
-LogicalResult loopUnrollFull(scf::ForOp forOp);
+LogicalResult loopUnrollFull(scf::ForOp forOp,
+                             bool promoteSingleIteration = true);
 
 /// Unrolls this for operation by the specified unroll factor. Returns failure
 /// if the loop cannot be unrolled either due to restrictions or due to invalid
 /// unroll factors. Requires positive loop bounds and step.
 LogicalResult loopUnrollByFactor(AffineForOp forOp, uint64_t unrollFactor);
-LogicalResult loopUnrollByFactor(scf::ForOp forOp, uint64_t unrollFactor);
+LogicalResult loopUnrollByFactor(scf::ForOp forOp, uint64_t unrollFactor,
+                                 bool promoteSingleIteration = true);
 
 /// Unrolls this loop by the specified unroll factor or its trip count,
 /// whichever is lower.

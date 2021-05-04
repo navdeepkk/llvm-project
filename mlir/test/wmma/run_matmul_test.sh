@@ -61,18 +61,18 @@ $MLIR_OPT matmul_opt_base.mlir \
   --canonicalize --cse > specialized.mlir
   $MLIR_OPT specialized.mlir --test-pipeline-pointwise-copy \
   --canonicalize --test-gpu-matmul-barrier-insertion > pipelined.mlir 
-  $MLIR_OPT pipelined.mlir --test-vectorize-gpu-matmul-copy-loops="load-store-width=$load_store_width" \
+  $MLIR_OPT pipelined.mlir --test-normalize-copy-loops --canonicalize --cse > normalized.mlir
+  $MLIR_OPT normalized.mlir --test-vectorize-gpu-matmul-copy-loops="load-store-width=$load_store_width" \
   --canonicalize > vectorized.mlir
-  #$MLIR_OPT vectorized.mlir --test-unroll-specific-loops > unrolled.mlir
   $MLIR_OPT vectorized.mlir --test-collapse-affine-parallel > parallel.mlir 
   $MLIR_OPT parallel.mlir --canonicalize \
   --lower-affine > scf.mlir 
   $MLIR_OPT scf.mlir --test-gpu-matmul-parallel-loop-mapping > mapped.mlir
   $MLIR_OPT mapped.mlir --canonicalize \
-  --test-convert-matmul-parallel-loops-to-gpu --cse > matmul_inter.mlir
+  --test-convert-matmul-parallel-loops-to-gpu --canonicalize --cse > matmul_inter.mlir
+  $MLIR_OPT matmul_inter.mlir --test-unroll-and-delay-copies --canonicalize > unrolled.mlir
   #--test-convert-matmul-parallel-loops-to-gpu --test-unroll-scf-specific-loops --cse > matmul_inter.mlir
-  $MLIR_OPT matmul_inter.mlir --canonicalize \
-  -gpu-kernel-outlining \
+  $MLIR_OPT unrolled.mlir --gpu-kernel-outlining \
   --test-gpu-mark-global-as-workgroup-memory > outlined.mlir
   $MLIR_OPT outlined.mlir --canonicalize \
   --cse \

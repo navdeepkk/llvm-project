@@ -35,8 +35,12 @@ public:
     SmallVector<AffineForOp> loops;
     func.walk([&](AffineForOp forOp) {
       BoolAttr isCopyLoop = forOp->getAttrOfType<BoolAttr>(copyLoopAttr);
-      if (isCopyLoop && isCopyLoop.getValue() == true)
-        loops.push_back(forOp);
+      if (isCopyLoop && isCopyLoop.getValue() == true) {
+        SmallVector<AffineForOp> copyLoopNest;
+        getPerfectlyNestedLoops(copyLoopNest, forOp);
+        for (auto loop : copyLoopNest)
+          loops.push_back(loop);
+      }
     });
     for (auto loop : loops)
       normalizeAffineFor(loop);

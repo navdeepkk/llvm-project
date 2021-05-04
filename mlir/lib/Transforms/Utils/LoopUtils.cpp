@@ -1335,8 +1335,8 @@ LogicalResult mlir::loopUnrollByFactor(AffineForOp forOp,
 }
 
 /// Unrolls 'forOp' by 'unrollFactor', returns success if the loop is unrolled.
-LogicalResult mlir::loopUnrollByFactor(scf::ForOp forOp,
-                                       uint64_t unrollFactor) {
+LogicalResult mlir::loopUnrollByFactor(scf::ForOp forOp, uint64_t unrollFactor,
+                                       bool promoteSingleIteration) {
   assert(unrollFactor > 0 && "expected positive unroll factor");
   if (unrollFactor == 1)
     return promoteIfSingleIteration(forOp);
@@ -1442,12 +1442,14 @@ LogicalResult mlir::loopUnrollByFactor(scf::ForOp forOp,
       },
       iterArgs, yieldedValues);
   // Promote the loop body up if this has turned into a single iteration loop.
-  (void)promoteIfSingleIteration(forOp);
+  if (promoteSingleIteration)
+    (void)promoteIfSingleIteration(forOp);
   return success();
 }
 
 /// Unrolls this loop completely.
-LogicalResult mlir::loopUnrollFull(scf::ForOp forOp) {
+LogicalResult mlir::loopUnrollFull(scf::ForOp forOp,
+                                   bool promoteSingleIteration) {
   auto lb = dyn_cast<ConstantIndexOp>(forOp.lowerBound().getDefiningOp());
   auto ub = dyn_cast<ConstantIndexOp>(forOp.upperBound().getDefiningOp());
   auto step = dyn_cast<ConstantIndexOp>(forOp.step().getDefiningOp());
@@ -1459,7 +1461,7 @@ LogicalResult mlir::loopUnrollFull(scf::ForOp forOp) {
     int64_t stepVal = step.getValue();
 
     tripCount = mlir::ceilDiv(ubVal - lbVal, stepVal);
-    return loopUnrollByFactor(forOp, tripCount);
+    return loopUnrollByFactor(forOp, tripCount, promoteSingleIteration);
   }
   return failure();
 }
