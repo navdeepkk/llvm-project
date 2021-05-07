@@ -53,11 +53,6 @@ static llvm::cl::opt<unsigned> clJIToptLevel(
     llvm::cl::desc("Opt level to be supplied to the blob converter"),
     llvm::cl::init(4));
 
-static llvm::cl::opt<unsigned>
-    clCuJitOptLevel("cu-jit-opt-level",
-                    llvm::cl::desc("CU JIT optimization level to set"),
-                    llvm::cl::init(4));
-
 static llvm::cl::opt<bool>
     clDumpCubin("dump-cubin",
                 llvm::cl::desc("Dump cubin for each gpu.func region"),
@@ -110,7 +105,7 @@ OwnedBlob compilePtxToCubin(const std::string ptx, Location loc,
                                     CU_JIT_OPTIMIZATION_LEVEL};
   void *extraJitOptionsVals[] = {
       reinterpret_cast<void *>(clMaxRegPerThread.getValue()),
-      reinterpret_cast<void *>(clCuJitOptLevel.getValue())};
+      reinterpret_cast<void *>(clJIToptLevel.getValue())};
 
   RETURN_ON_CUDA_ERROR(
       cuLinkAddData(linkState, CUjitInputType::CU_JIT_INPUT_PTX,
