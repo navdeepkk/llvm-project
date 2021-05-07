@@ -69,7 +69,7 @@ $MLIR_OPT matmul_opt_base.mlir \
   --lower-affine > scf.mlir 
   $MLIR_OPT scf.mlir --test-gpu-matmul-parallel-loop-mapping > mapped.mlir
   $MLIR_OPT mapped.mlir --canonicalize \
-  --test-convert-matmul-parallel-loops-to-gpu --canonicalize --cse > matmul_inter.mlir
+  --test-convert-matmul-parallel-loops-to-gpu --cse > matmul_inter.mlir
   $MLIR_OPT matmul_inter.mlir --test-unroll-and-delay-copies --canonicalize > unrolled.mlir
   #--test-convert-matmul-parallel-loops-to-gpu --test-unroll-scf-specific-loops --cse > matmul_inter.mlir
   $MLIR_OPT unrolled.mlir --gpu-kernel-outlining \

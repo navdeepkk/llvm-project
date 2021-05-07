@@ -75,6 +75,8 @@ private:
 static int64_t warpSize;
 Value linearTidXYZ, numThreadsXYZ, linearWarpId, mTile, nTile, numWarps,
     warpMtile, warpNtile;
+int64_t numThreadsXYZCst, mTileCst, nTileCst, numWarpsCst, warpMtileCst,
+    warpNtileCst;
 static bool isMappedToProcessor(gpu::Processor processor) {
   return processor != gpu::Processor::Sequential;
 }
@@ -302,13 +304,20 @@ static LogicalResult convertParallelLoop(gpu::LaunchOp launchOp,
       Value iv, upperBound, step;
       std::tie(iv, upperBound, step) = loop;
 
-      Value numElemsToCopyPerThread = rewriter.create<SignedDivIOp>(
-          loc, cloningMap.lookupOrDefault(upperBound),
-          cloningMap.lookupOrDefault(numThreadsXYZ));
+      Operation *upperBoundDefOp = upperBound.getDefiningOp();
+      assert(isa<ConstantIndexOp>(upperBoundDefOp) &&
+             "expected upperBound of copy loop to be defined as a constant");
+      int64_t upperBoundCst =
+          static_cast<ConstantIndexOp>(upperBoundDefOp).getValue();
+      // Value numElemsToCopyPerThread = rewriter.create<SignedDivIOp>(
+      //    loc, cloningMap.lookupOrDefault(upperBound),
+      //    cloningMap.lookupOrDefault(numThreadsXYZ));
+      int64_t numElemsToCopyPerThreadCst = upperBoundCst / numThreadsXYZCst;
 
       auto loopOp = rewriter.create<scf::ForOp>(
           loc, rewriter.create<ConstantIndexOp>(loc, 0),
-          numElemsToCopyPerThread, rewriter.create<ConstantIndexOp>(loc, 1));
+          rewriter.create<ConstantIndexOp>(loc, numElemsToCopyPerThreadCst),
+          rewriter.create<ConstantIndexOp>(loc, 1));
 
       rewriter.setInsertionPointToStart(loopOp.getBody());
       Value ivNumThreads =
@@ -448,12 +457,18 @@ static void doPreComputationStuff(gpu::LaunchOp gpuLaunchOp,
 
 /// Compute total number of threads.
 static void computeNumThreads(Location loc, PatternRewriter &rewriter) {
-  Value mbywarpM = rewriter.create<UnsignedDivIOp>(loc, mTile, warpMtile);
-  Value nbywarpN = rewriter.create<UnsignedDivIOp>(loc, nTile, warpNtile);
-  Value mbyWMintonbyWN = rewriter.create<MulIOp>(loc, mbywarpM, nbywarpN);
+  // Value mbywarpM = rewriter.create<UnsignedDivIOp>(loc, mTile, warpMtile);
+  // Value nbywarpN = rewriter.create<UnsignedDivIOp>(loc, nTile, warpNtile);
+  // Value mbyWMintonbyWN = rewriter.create<MulIOp>(loc, mbywarpM, nbywarpN);
+  int64_t mByWarpM = mTileCst / warpMtileCst;
+  int64_t nByWarpN = nTileCst / warpNtileCst;
+  int64_t mByWmIntoNbyWn = mByWarpM * nByWarpN;
+  Value mByWmIntoNbyWnVal =
+      rewriter.create<ConstantIndexOp>(loc, mByWmIntoNbyWn);
   Value constantWarpSize = rewriter.create<ConstantIndexOp>(loc, warpSize);
   numThreadsXYZ =
-      rewriter.create<MulIOp>(loc, mbyWMintonbyWN, constantWarpSize);
+      rewriter.create<MulIOp>(loc, mByWmIntoNbyWnVal, constantWarpSize);
+  numThreadsXYZCst = mByWmIntoNbyWn * warpSize;
 }
 
 /// Finds tile sizes.
@@ -476,10 +491,23 @@ static void findTileSizes(ParallelOp parallelOp) {
   assert(warpLoop.getNumLoops() == 2 && "Not a 2-d warp loop");
   SmallVector<Value, 2> threadBlockLoopSteps(parallelOp.step());
   SmallVector<Value, 2> warpLoopSteps(warpLoop.step());
+  Operation *mTileDefOp, *nTileDefOp, *warpMtileDefOp, *warpNtileDefOp;
+  mTileDefOp = threadBlockLoopSteps[0].getDefiningOp();
+  nTileDefOp = threadBlockLoopSteps[1].getDefiningOp();
+  warpMtileDefOp = warpLoopSteps[0].getDefiningOp();
+  warpNtileDefOp = warpLoopSteps[1].getDefiningOp();
+  assert(isa<ConstantIndexOp>(mTileDefOp) && isa<ConstantIndexOp>(nTileDefOp) &&
+         isa<ConstantIndexOp>(warpMtileDefOp) &&
+         isa<ConstantIndexOp>(warpNtileDefOp) &&
+         "expected constant steps for thread-block and warp loops");
   mTile = threadBlockLoopSteps[0];
+  mTileCst = static_cast<ConstantIndexOp>(mTileDefOp).getValue();
   nTile = threadBlockLoopSteps[1];
+  nTileCst = static_cast<ConstantIndexOp>(nTileDefOp).getValue();
   warpMtile = warpLoopSteps[0];
+  warpMtileCst = static_cast<ConstantIndexOp>(warpMtileDefOp).getValue();
   warpNtile = warpLoopSteps[1];
+  warpNtileCst = static_cast<ConstantIndexOp>(warpNtileDefOp).getValue();
 }
 
 LogicalResult
