@@ -426,4 +426,12 @@ def NVVM_WMMAMmaF32F32Op : NVVM_WMMAMmaOp<"wmma.m16n16k16.mma.row.row.f32.f32">{
   let verifier = [{ return ::verify(*this); }];
 }
 
+def NVVM_WMMAScaleOp :
+  NVVM_Op<"wmma.scale">,
+  Results<(outs LLVM_AnyStruct:$res)>,
+  Arguments<(ins Variadic<LLVM_Type>:$args)> {
+  let assemblyFormat = "$args attr-dict `:` functional-type($args, $res)";
+  //let verifier = [{ return ::verify(*this); }];
+}
+
 #endif // NVVMIR_OPS

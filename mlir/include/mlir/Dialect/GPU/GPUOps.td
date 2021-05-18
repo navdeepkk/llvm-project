@@ -1029,4 +1029,44 @@ def GPU_SubgroupMmaComputeOp : GPU_Op<"subgroup_mma_compute", []>{
   let verifier = [{ return ::verify(*this); }];
 }
 
+def GPU_SubgroupMmaScaleOp : GPU_Op<"subgroup_mma_scale", []>{
+
+  let summary = "GPU warp synchronous matrix multiply accumulate";
+
+  let description = [{
+    TODO:
+  }];
+
+  let arguments = (ins Arg<MMAFragmentOf<[VectorOfLengthAndType<[2], [F16]>, F32]>>:$frag,
+                  Arg<AnyTypeOf<[F16, F32]>>: $factor);
+
+  let results = (outs GPU_MMAFragment:$res);
+
+  let assemblyFormat = [{
+    $frag`,` $factor attr-dict `:` type($frag)`,` type($factor) `->` type($res)
+  }];
+
+  //let verifier = [{ return ::verify(*this); }];
+}
+
+def GPU_SubgroupMmaAddOp : GPU_Op<"subgroup_mma_add", []>{
+
+  let summary = "GPU warp synchronous matrix multiply accumulate";
+
+  let description = [{
+    TODO:
+  }];
+
+  let arguments = (ins Arg<MMAFragmentOf<[VectorOfLengthAndType<[2], [F16]>, F32]>>:$opA,
+                  Arg<MMAFragmentOf<[VectorOfLengthAndType<[2], [F16]>, F32]>>:$opB);
+
+  let results = (outs GPU_MMAFragment:$res);
+
+  let assemblyFormat = [{
+    $opA`,` $opB attr-dict `:` type($opA)`,` type($opB) `->` type($res)
+  }];
+
+  //let verifier = [{ return ::verify(*this); }];
+}
+
 #endif // GPU_OPS

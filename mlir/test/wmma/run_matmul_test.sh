@@ -80,6 +80,7 @@ $MLIR_OPT matmul_opt_base.mlir \
 
 #$MLIR_CUDA_RUNNER matmul_opt_final.mlir -O3 --jit-opt-level=$jit_opt_level --print-ir-after-all --max-reg-per-thread=$reg_per_thread --sm=sm_75 --index-bitwidth=32 -gpu-to-cubin="gpu-binary-annotation=nvvm.cubin" -gpu-to-llvm="gpu-binary-annotation=nvvm.cubin" $MLIR_RUNTIME_LIBS --entry-point-result=void > full_pipe.out
 $MLIR_CUDA_RUNNER matmul_opt_final.mlir -O3 --jit-opt-level=$jit_opt_level --max-reg-per-thread=$reg_per_thread --sm=sm_75 --index-bitwidth=32 -gpu-to-cubin="gpu-binary-annotation=nvvm.cubin" -gpu-to-llvm="gpu-binary-annotation=nvvm.cubin" $MLIR_RUNTIME_LIBS --entry-point-result=void > full_pipe.out
+sed '1d' full_pipe.out > tmpfile; mv tmpfile full_pipe.out
 
 # Run the naive version for verification.
 if [[ $verify -eq 1 ]]
@@ -90,7 +91,6 @@ then
 
   echo -ne "Verifying...   "
   # Delete first line in the output which contains irrelevant memref info.
-  sed '1d' full_pipe.out > tmpfile; mv tmpfile full_pipe.out
   sed '1d' naive.out > tmpfile; mv tmpfile naive.out
 
   # Compare the output.

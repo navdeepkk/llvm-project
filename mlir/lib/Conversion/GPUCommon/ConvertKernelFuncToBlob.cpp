@@ -143,7 +143,7 @@ OwnedBlob GpuKernelToBlobPass::convertModuleToBlob(llvm::Module &llvmModule,
 
   auto targetISA = translateModuleToISA(llvmModule, *targetMachine);
 
-  // llvm::outs() << targetISA << "\n";
+  llvm::outs() << targetISA << "\n";
 
   return blobGenerator(targetISA, loc, name);
 }
